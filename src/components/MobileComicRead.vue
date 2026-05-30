@@ -32,7 +32,14 @@ const emit = defineEmits<{
 }>()
 
 const { isFullscreen, toggleFullscreen, exitFullscreen } = useReaderFullscreen()
-const { chromeVisible, onReaderScrollForChrome } = useReaderChromeAutoHide()
+const {
+  chromeVisible,
+  onReaderScrollForChrome,
+  onReaderTouchStart,
+  onReaderTouchMove,
+  onReaderTouchEnd,
+  onReaderTouchCancel,
+} = useReaderChromeAutoHide()
 const { scrollClass: aspectScrollClass } = useReaderAspectRatio()
 
 const pageSrc = ref<Map<number, string>>(new Map())
@@ -241,7 +248,16 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div ref="scrollRef" class="reader-scroll" :class="aspectScrollClass" @scroll="onReaderScroll">
+    <div
+      ref="scrollRef"
+      class="reader-scroll"
+      :class="aspectScrollClass"
+      @scroll="onReaderScroll"
+      @touchstart.passive="onReaderTouchStart"
+      @touchmove.passive="onReaderTouchMove"
+      @touchend="onReaderTouchEnd"
+      @touchcancel="onReaderTouchCancel"
+    >
       <div v-if="!readingActive" class="reader-idle">
         <p>請在「漫畫詳情」點擊「閱讀」開始</p>
       </div>

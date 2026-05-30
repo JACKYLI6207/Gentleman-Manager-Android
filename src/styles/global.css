@@ -12,6 +12,9 @@ html {
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
   background: #121212;
+  /* Android WebView 常回報 safe-area 為 0；與 App.vue 頂部列一致 */
+  --gm-safe-top: max(env(safe-area-inset-top, 0px), 28px);
+  --gm-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 body {

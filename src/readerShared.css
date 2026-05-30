@@ -52,6 +52,36 @@
   pointer-events: none;
 }
 
+.reader-top-chrome {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 100006;
+  /* 全視窗標題：略小於主介面 28px 後備，貼近狀態欄但不重疊 */
+  padding-top: max(env(safe-area-inset-top, 0px), 24px);
+  background: #1a2744;
+  border-bottom: 1px solid #2a4a6e;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  transition: transform 0.28s ease;
+  will-change: transform;
+}
+
+.reader-top-chrome--hidden {
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
+.reader-top-title {
+  padding: 5px 12px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .reader-bottom-chrome .reader-progress-dock {
   border-top: none;
 }

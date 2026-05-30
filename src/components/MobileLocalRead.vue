@@ -24,7 +24,7 @@ import {
   saveSourceReadPosition,
   touchFolderPersist,
 } from '../localReadStore'
-import { decodeFolderDisplayLabel, isGmSnapCacheTitle } from '../readerDisplayName'
+import { decodeFolderDisplayLabel, isGmSnapCacheTitle, pickLocalReaderTitle } from '../readerDisplayName'
 import { useReaderAspectRatio } from '../composables/useReaderAspectRatio'
 import { useReaderChromeAutoHide } from '../composables/useReaderChromeAutoHide'
 import { useReaderFullscreen } from '../composables/useReaderFullscreen'
@@ -78,7 +78,14 @@ import '../readerShared.css'
 const PREFETCH_MARGIN = '600px 0px'
 
 const { isFullscreen, toggleFullscreen, exitFullscreen } = useReaderFullscreen()
-const { chromeVisible, onReaderScrollForChrome } = useReaderChromeAutoHide()
+const {
+  chromeVisible,
+  onReaderScrollForChrome,
+  onReaderTouchStart,
+  onReaderTouchMove,
+  onReaderTouchEnd,
+  onReaderTouchCancel,
+} = useReaderChromeAutoHide()
 const { scrollClass: aspectScrollClass } = useReaderAspectRatio()
 
 const s = localReadSession
@@ -268,6 +275,15 @@ const hasNextBook = computed(
     canNavigateBooks.value &&
     currentSourceIndex.value >= 0 &&
     currentSourceIndex.value < folderSources.value.length - 1,
+)
+
+const localReaderDisplayTitle = computed(() =>
+  pickLocalReaderTitle(
+    readerTitle.value,
+    folderSources.value,
+    currentSourcePath.value,
+    currentSourceIndex.value,
+  ),
 )
 
 function isZipKind(kind?: 'zip' | 'folder') {
@@ -1198,10 +1214,23 @@ onBeforeUnmount(() => {
 
   <div v-else :class="['reader-shell', { 'reader-shell--fullscreen': isFullscreen }]">
     <div
+      v-if="isFullscreen"
+      class="reader-top-chrome"
+      :class="{ 'reader-top-chrome--hidden': !chromeVisible }"
+    >
+      <div class="reader-top-title" :title="localReaderDisplayTitle">
+        {{ localReaderDisplayTitle }}
+      </div>
+    </div>
+    <div
       ref="scrollContainerRef"
       class="reader-scroll"
       :class="aspectScrollClass"
       @scroll="onReaderScroll"
+      @touchstart.passive="onReaderTouchStart"
+      @touchmove.passive="onReaderTouchMove"
+      @touchend="onReaderTouchEnd"
+      @touchcancel="onReaderTouchCancel"
     >
       <div
         v-for="(page, index) in readerPages"
