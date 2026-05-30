@@ -12,8 +12,10 @@ import {
 } from '../api'
 import {
   cancelFolderListMode,
+  clearSourceReadRecord,
   formatSourceProgressLabel,
   getSourceRecord,
+  hasSourceReadRecord,
   loadFolderSourceProgress,
   localReadFailedIndices,
   localReadPageSrcMap,
@@ -22,7 +24,9 @@ import {
   saveSourceReadPosition,
   touchFolderPersist,
 } from '../localReadStore'
+import { decodeFolderDisplayLabel, isGmSnapCacheTitle } from '../readerDisplayName'
 import { useReaderAspectRatio } from '../composables/useReaderAspectRatio'
+import { useReaderChromeAutoHide } from '../composables/useReaderChromeAutoHide'
 import { useReaderFullscreen } from '../composables/useReaderFullscreen'
 import {
   beginReaderRestore,
@@ -74,6 +78,7 @@ import '../readerShared.css'
 const PREFETCH_MARGIN = '600px 0px'
 
 const { isFullscreen, toggleFullscreen, exitFullscreen } = useReaderFullscreen()
+const { chromeVisible, onReaderScrollForChrome } = useReaderChromeAutoHide()
 const { scrollClass: aspectScrollClass } = useReaderAspectRatio()
 
 const s = localReadSession
@@ -277,6 +282,21 @@ function isZipPath(path: string): boolean {
   const lower = path.toLowerCase()
   return lower.endsWith('.zip') || lower.endsWith('.cbz') || lower.includes('.zip')
 }
+
+function titleForOpenedSource(displayTitle?: string, pagesTitle?: string): string {
+  const fromList =
+    displayTitle?.trim() ||
+    (currentSourceIndex.value >= 0
+      ? folderSources.value[currentSourceIndex.value]?.label?.trim()
+      : '') ||
+    folderSources.value.find((s) => s.path === currentSourcePath.value)?.label?.trim()
+  if (fromList) return fromList
+  const fallback = (pagesTitle ?? '').trim()
+  if (fallback && !isGmSnapCacheTitle(fallback)) return fallback
+  return '未命名篇章'
+}
+
+const folderPickerTitle = computed(() => decodeFolderDisplayLabel(folderLabel.value))
 
 function stopProgressAnimation() {
   if (progressTimer !== undefined) {
@@ -519,6 +539,7 @@ function saveReadingPosition() {
 }
 
 function onReaderScroll() {
+  onReaderScrollForChrome()
   if (!readingActive.value) return
   if (isRestoringMode() || hasActiveScrollIntent() || restoreScrollSuppress > 0) return
   if (isReaderScrollLocked()) return
@@ -541,7 +562,7 @@ function closeReading() {
 
   if (sourceListMode.value && folderSources.value.length > 0) {
     pickingSource.value = true
-    readerTitle.value = folderLabel.value
+    readerTitle.value = folderPickerTitle.value || decodeFolderDisplayLabel(folderLabel.value)
     touchFolderPersist()
     scrollContainerRef.value?.scrollTo({ top: 0 })
     return
@@ -759,9 +780,9 @@ async function activateReader() {
   updateScrollProgressBridge()
 }
 
-async function startReading(pages: LocalReaderPages) {
+async function startReading(pages: LocalReaderPages, displayTitle?: string) {
   clearReaderContent()
-  readerTitle.value = pages.title
+  readerTitle.value = titleForOpenedSource(displayTitle, pages.title)
   readerPages.value = pages.pages
   pickingSource.value = false
   readingActive.value = true
@@ -839,8 +860,9 @@ async function openSourceImpl(path: string, index: number, kind?: 'zip' | 'folde
   s.sessionKind = 'folder'
   currentSourceIndex.value = index
   currentSourcePath.value = path
+  const label = folderSources.value[index]?.label
   const result = await loadPagesWithProgress(path, resolvedKind)
-  await startReading(result)
+  await startReading(result, label)
 }
 
 function openSource(path: string, index: number, kind?: 'zip' | 'folder') {
@@ -974,8 +996,7 @@ function openFolder() {
         readerPages.value = []
         folderMultiZipMode.value = true
         sourceListMode.value = true
-        const label = selected.includes('/') ? selected.split('/').pop() : selected.split('\\').pop()
-        folderLabel.value = label ?? selected
+        folderLabel.value = decodeFolderDisplayLabel(selected)
         readerTitle.value = folderLabel.value
         pickingSource.value = true
         folderSources.value = sources
@@ -999,6 +1020,11 @@ function goToAdjacentSource(delta: number) {
   const source = folderSources.value[nextIndex]
   if (!source) return
   void openSource(source.path, nextIndex, source.kind)
+}
+
+function clearSourceRecord(path: string) {
+  if (!hasSourceReadRecord(path)) return
+  clearSourceReadRecord(path)
 }
 
 function resumeIfNeeded() {
@@ -1029,6 +1055,12 @@ watch(
 onMounted(() => {
   if (localReadSession.sourceListMode && localReadSession.folderSources.length > 0) {
     folderMultiZipMode.value = true
+  }
+  if (folderLabel.value) {
+    folderLabel.value = decodeFolderDisplayLabel(folderLabel.value)
+  }
+  if (pickingSource.value && !readingActive.value) {
+    readerTitle.value = folderPickerTitle.value
   }
   resumeIfNeeded()
 })
@@ -1090,7 +1122,7 @@ onBeforeUnmount(() => {
   <div v-if="pickingSource" class="reader-shell">
     <div class="reader-header">
       <div class="reader-header-title">
-        {{ readerTitle }}
+        {{ folderPickerTitle }}
         <span class="page-meta">請選擇要閱讀的篇章</span>
       </div>
       <div class="reader-header-actions">
@@ -1100,23 +1132,35 @@ onBeforeUnmount(() => {
     <p v-if="status && !openingBusy && !awaitingSystemPicker" class="reader-ph err">{{ status }}</p>
     <p v-if="awaitingSystemPicker" class="reader-ph picker-hint">{{ status }}</p>
     <div class="reader-source-list">
-      <button
+      <div
         v-for="(source, index) in folderSources"
         :key="source.path"
-        type="button"
-        class="reader-source-btn"
-        :disabled="openingBusy"
-        @click="openSource(source.path, index, source.kind)"
+        class="reader-source-item"
       >
-        <span class="source-btn-main">
-          <span v-if="getSourceRecord(source.path).opened" class="opened-dot" title="已開啟過">●</span>
-          {{ source.label }}
-          <span class="kind-tag">{{ source.kind === 'zip' ? 'ZIP' : '資料夾' }}</span>
-        </span>
-        <span v-if="formatSourceProgressLabel(source.path)" class="source-progress">
-          {{ formatSourceProgressLabel(source.path) }}
-        </span>
-      </button>
+        <button
+          type="button"
+          class="reader-source-main"
+          :disabled="openingBusy"
+          @click="openSource(source.path, index, source.kind)"
+        >
+          <span class="source-btn-main">
+            <span v-if="getSourceRecord(source.path).opened" class="opened-dot" title="已開啟過">●</span>
+            {{ source.label }}
+            <span class="kind-tag">{{ source.kind === 'zip' ? 'ZIP' : '資料夾' }}</span>
+          </span>
+          <span v-if="formatSourceProgressLabel(source.path)" class="source-progress">
+            {{ formatSourceProgressLabel(source.path) }}
+          </span>
+        </button>
+        <button
+          type="button"
+          class="reader-source-clear"
+          :disabled="openingBusy || !hasSourceReadRecord(source.path)"
+          @click.stop="clearSourceRecord(source.path)"
+        >
+          清除紀錄
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1180,7 +1224,10 @@ onBeforeUnmount(() => {
     </div>
     <div
       class="reader-bottom-chrome"
-      :class="{ 'reader-bottom-chrome--fullscreen': isFullscreen }"
+      :class="{
+        'reader-bottom-chrome--fullscreen': isFullscreen,
+        'reader-bottom-chrome--hidden': isFullscreen && !chromeVisible,
+      }"
     >
       <div class="reader-header reader-header--bottom">
         <ReaderAspectRatioMenu />
@@ -1249,11 +1296,6 @@ onBeforeUnmount(() => {
   margin-left: 6px;
   font-size: 10px;
 }
-.reader-source-btn {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
 .source-btn-main {
   display: flex;
   align-items: center;
@@ -1267,9 +1309,12 @@ onBeforeUnmount(() => {
   line-height: 1;
 }
 .source-progress {
+  display: block;
+  width: 100%;
   font-size: 11px;
   color: #9ab;
   opacity: 0.9;
+  line-height: 1.3;
 }
 .reader-ph.err {
   color: #e88;

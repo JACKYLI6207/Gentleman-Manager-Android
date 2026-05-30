@@ -21,9 +21,16 @@ Gentleman Manager Android 是以 **Tauri 2 Mobile + Vue 3 + Rust** 製作的 And
 ## v1.0 重點
 
 - Android 版首次獨立開源發佈。
-- 完整四架構 Release APK（見 [Releases](https://github.com/JACKYLI6207/Gentleman-Manager-Android/releases)）。
+- 完整四架構 Release APK（見 [Releases](https://github.com/JACKYLI6207/Gentleman-Manager-Android/releases/tag/v1.0)）。
 - 分頁列依單個頁碼寬度與螢幕寬度自動決定顯示數量。
 - 「我的收藏」下拉選單改為與「漫畫閱讀」相同之左側對齊。
+
+## v1.0 更新（2026-05-30）
+
+- **本地閱讀**：視窗模式頂部顯示中文篇章名；全視窗時隱藏，底部控制列滑動隱藏、停頓 1 秒後彈回。
+- **本地閱讀**：資料夾篇章列表新增「清除紀錄」，可清除已開啟標記與閱讀進度。
+- 修正 SAF 資料夾／快取 ZIP 檔名顯示亂碼（`gm-snap-*`、`%3A` 等）。
+- 修正資料夾篇章列表被 flex 壓扁、無法捲動的問題。
 
 ## 技術棧
 

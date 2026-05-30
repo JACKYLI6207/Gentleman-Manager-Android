@@ -85,6 +85,7 @@ import {
 } from './koreanTxtDuplicate'
 import { readerFullscreenActive } from './composables/useReaderFullscreen'
 import { initLocalReadOnAppLaunch, localReadSession } from './localReadStore'
+import { pickLocalReaderTitle } from './readerDisplayName'
 
 type TabId = 'home' | 'download' | 'settings'
 type SubNav = 'search' | 'detail' | 'read' | 'favorites' | 'snapshots'
@@ -137,6 +138,40 @@ const favoriteComics = ref<ComicInSearch[]>(loadFavoriteComics())
 const comicListMeta = ref<Map<number, string>>(new Map())
 const readingComic = ref<Comic | null>(null)
 const onlineReadingActive = ref(false)
+
+/** 視窗模式：次導覽下方顯示目前閱讀檔名；全視窗時隱藏 */
+const showReaderTitleBar = computed(() => {
+  if (subNav.value !== 'read' || readerFullscreenActive.value) return false
+  if (readMode.value === 'local') {
+    if (!localReadSession.readingActive) return false
+    const s = localReadSession
+    return (
+      pickLocalReaderTitle(
+        s.readerTitle,
+        s.folderSources,
+        s.currentSourcePath,
+        s.currentSourceIndex,
+      ).length > 0
+    )
+  }
+  if (readMode.value === 'online') {
+    return onlineReadingActive.value && Boolean(readingComic.value?.title?.trim())
+  }
+  return false
+})
+
+const activeReaderTitle = computed(() => {
+  if (readMode.value === 'local') {
+    const s = localReadSession
+    return pickLocalReaderTitle(
+      s.readerTitle,
+      s.folderSources,
+      s.currentSourcePath,
+      s.currentSourceIndex,
+    )
+  }
+  return readingComic.value?.title ?? ''
+})
 
 const loading = ref(false)
 const statusMessage = ref('')
@@ -2275,6 +2310,10 @@ onUnmounted(() => {
         </nav>
         </div>
 
+        <div v-if="showReaderTitleBar" class="reader-title-bar" :title="activeReaderTitle">
+          {{ activeReaderTitle }}
+        </div>
+
         <section v-if="subNav === 'search'" class="search-bar">
           <div class="scope-wrap">
             <button
@@ -3848,6 +3887,19 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+.reader-title-bar {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #eee;
+  background: #1a2744;
+  border-bottom: 1px solid #2a4a6e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab-h2 {

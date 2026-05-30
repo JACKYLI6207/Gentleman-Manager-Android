@@ -1,5 +1,6 @@
 import { reactive, ref } from 'vue'
 import type { LocalReaderPage, LocalReaderSource } from './api'
+import { decodeFolderDisplayLabel } from './readerDisplayName'
 
 const FOLDER_STORAGE_KEY = 'gm-android-local-read-folder-v2'
 const PROGRESS_BY_FOLDER_KEY = 'gm-android-local-read-folder-progress-v2'
@@ -155,6 +156,18 @@ export function formatSourceProgressLabel(path: string): string | null {
   return `${page}/${rec.totalPages}頁`
 }
 
+export function hasSourceReadRecord(path: string): boolean {
+  const rec = getSourceRecord(path)
+  return rec.opened
+}
+
+/** 清除單一篇章的已開啟標記與閱讀進度 */
+export function clearSourceReadRecord(path: string) {
+  if (!path) return
+  delete folderSourceProgress[path]
+  touchFolderPersist()
+}
+
 export function hasLocalReadSession(): boolean {
   const s = localReadSession
   return (
@@ -227,7 +240,7 @@ export function restoreFolderSessionFromStorage(): boolean {
     if (!data.folderTreeUri) return false
     localReadSession.sessionKind = 'folder'
     localReadSession.folderTreeUri = data.folderTreeUri
-    localReadSession.folderLabel = data.folderLabel ?? ''
+    localReadSession.folderLabel = decodeFolderDisplayLabel(data.folderLabel ?? '')
     localReadSession.folderSources = data.folderSources ?? []
     localReadSession.sourceListMode = data.sourceListMode ?? false
     localReadSession.pickingSource = data.pickingSource ?? false

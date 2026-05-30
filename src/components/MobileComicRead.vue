@@ -3,6 +3,7 @@ import { nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'v
 import type { Comic } from '../api'
 import { getReaderImage } from '../api'
 import { useReaderAspectRatio } from '../composables/useReaderAspectRatio'
+import { useReaderChromeAutoHide } from '../composables/useReaderChromeAutoHide'
 import { useReaderFullscreen } from '../composables/useReaderFullscreen'
 import {
   isReaderScrollLocked,
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 }>()
 
 const { isFullscreen, toggleFullscreen, exitFullscreen } = useReaderFullscreen()
+const { chromeVisible, onReaderScrollForChrome } = useReaderChromeAutoHide()
 const { scrollClass: aspectScrollClass } = useReaderAspectRatio()
 
 const pageSrc = ref<Map<number, string>>(new Map())
@@ -168,6 +170,7 @@ function seekByRatio(ratio: number) {
 }
 
 function onReaderScroll() {
+  onReaderScrollForChrome()
   if (!props.readingActive || !props.active || isReaderScrollLocked()) return
   updateScrollProgressBridge()
 }
@@ -265,7 +268,10 @@ onBeforeUnmount(() => {
     <div
       v-if="readingActive"
       class="reader-bottom-chrome"
-      :class="{ 'reader-bottom-chrome--fullscreen': isFullscreen }"
+      :class="{
+        'reader-bottom-chrome--fullscreen': isFullscreen,
+        'reader-bottom-chrome--hidden': isFullscreen && !chromeVisible,
+      }"
     >
       <div class="reader-header reader-header--bottom">
         <ReaderAspectRatioMenu />
