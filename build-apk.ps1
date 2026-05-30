@@ -1,7 +1,7 @@
 ﻿# Gentleman Manager Android — 一鍵建置簽章 APK（含進度與預估剩餘時間）
 # 用法：
-#   完整：建置APK-完整.bat / build-apk.ps1 -Mode Full
-#   快速：建置APK-快速.bat / build-apk.ps1 -Mode Fast  （僅 arm64-v8a，真機測試用）
+#   完整：build-apk.ps1 -Mode Full  /  pnpm android:build:full
+#   快速：build-apk.ps1 -Mode Fast   /  pnpm android:build:fast  （僅 arm64-v8a，真機測試用）
 param(
     [ValidateSet('Fast', 'Full')]
     [string]$Mode = 'Full',

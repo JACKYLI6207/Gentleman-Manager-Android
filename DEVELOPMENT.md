@@ -35,7 +35,7 @@ pnpm tauri android dev
 | 快速測試（arm64） | `pnpm android:build:fast` | `Gentleman-Manager-Android-v{version}-fast.apk` |
 | 完整（四架構） | `pnpm android:build:full` | `Gentleman-Manager-Android-v{version}.apk` |
 
-亦可雙擊 `建置APK-快速.bat` / `建置APK-完整.bat`。
+或 PowerShell：`powershell -ExecutionPolicy Bypass -File .\build-apk.ps1 -Mode Fast` / `-Mode Full`
 
 ## 倉庫體積說明
 
