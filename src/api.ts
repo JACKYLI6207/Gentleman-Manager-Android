@@ -41,6 +41,7 @@ export type Config = {
   apiDomainMode: 'Default' | 'Custom'
   customApiDomain: string
   downloadRetryCount: number
+  downloadFailureRestSec: number
   koreanTxtCatalogDir: string
   koreanTxtDuplicateCheckEnabled: boolean
   /** 快照更新掃描：舊 ID 重複超過此數後才可能提早停止（預設 20） */
@@ -339,12 +340,30 @@ export function removeDownloadTaskRecord(comicId: number) {
   return invoke<null>('remove_download_task_record', { comicId })
 }
 
-export function prepareKoreanSeriesFolder(
+export function listSimilarKoreanSeriesFolders(
   seriesLabel: string,
   episodeStart: number,
   episodeEnd: number,
 ) {
-  return invoke<string>('prepare_korean_series_folder', { seriesLabel, episodeStart, episodeEnd })
+  return invoke<string[]>('list_similar_korean_series_folders', {
+    seriesLabel,
+    episodeStart,
+    episodeEnd,
+  })
+}
+
+export function prepareKoreanSeriesFolder(
+  seriesLabel: string,
+  episodeStart: number,
+  episodeEnd: number,
+  existingFolderName?: string | null,
+) {
+  return invoke<string>('prepare_korean_series_folder', {
+    seriesLabel,
+    episodeStart,
+    episodeEnd,
+    existingFolderName: existingFolderName ?? null,
+  })
 }
 
 export function getReaderImage(comicId: number, imgUrl: string) {

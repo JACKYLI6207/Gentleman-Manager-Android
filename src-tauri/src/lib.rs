@@ -8,6 +8,7 @@ mod events;
 mod extensions;
 #[cfg(target_os = "android")]
 mod folder_picker;
+mod korean_series_folder;
 mod korean_txt_catalog;
 mod local_reader;
 mod logger;
@@ -81,6 +82,7 @@ pub fn run() {
             create_download_task_by_id,
             create_download_task_placeholder,
             prepare_korean_series_folder,
+            list_similar_korean_series_folders,
             pause_download_task,
             resume_download_task,
             cancel_download_task,

@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { getConfig, readKoreanTxtCatalog, type ComicInSearch } from '../api'
+import {
+  getConfig,
+  listSimilarKoreanSeriesFolders,
+  prepareKoreanSeriesFolder,
+  readKoreanTxtCatalog,
+  type ComicInSearch,
+} from '../api'
 import {
   analyzeKoreanWebtoon,
   defaultCheckedIds,
@@ -23,12 +29,17 @@ const emit = defineEmits<{
       rangeMin: number
       rangeMax: number
       tagLabel: string
+      seriesFolder: string
     },
   ]
 }>()
 
 const strategy = ref<KoreanDownloadStrategy>('episodes')
 const checkedIds = ref<Set<number>>(new Set())
+const submitting = ref(false)
+const similarFolderOpen = ref(false)
+const similarFolderChoices = ref<string[]>([])
+const similarFolderChoice = ref<'new' | string>('new')
 const txtDuplicateLoading = ref(false)
 const txtDuplicateError = ref('')
 const txtDuplicateAnalysis = ref<KoreanTxtDuplicateAnalysis | null>(null)
@@ -77,16 +88,68 @@ async function runTxtDuplicateAnalysis() {
   }
 }
 
-function confirmSelection() {
-  const selectedItems = previewItems.value.filter((item) => checkedIds.value.has(item.comic.id))
-  if (selectedItems.length === 0) return
-  emit('confirm', {
-    selectedItems,
-    rangeMin: analysis.value.rangeMin,
-    rangeMax: analysis.value.rangeMax,
-    tagLabel: analysis.value.tagLabel,
+async function askSimilarFolderChoice(candidates: string[]): Promise<'cancel' | 'new' | string> {
+  similarFolderChoices.value = candidates
+  similarFolderChoice.value = candidates[0] ?? 'new'
+  similarFolderOpen.value = true
+  return await new Promise((resolve) => {
+    similarFolderResolve = resolve
   })
-  emit('update:showing', false)
+}
+
+let similarFolderResolve: ((value: 'cancel' | 'new' | string) => void) | null = null
+
+function finishSimilarFolderChoice(value: 'cancel' | 'new' | string) {
+  similarFolderOpen.value = false
+  similarFolderChoices.value = []
+  similarFolderResolve?.(value)
+  similarFolderResolve = null
+}
+
+async function confirmSelection() {
+  const selectedItems = previewItems.value.filter((item) => checkedIds.value.has(item.comic.id))
+  if (selectedItems.length === 0 || submitting.value) return
+
+  submitting.value = true
+  try {
+    const seriesLabel = analysis.value.tagLabel
+    const similar = await listSimilarKoreanSeriesFolders(
+      seriesLabel,
+      analysis.value.rangeMin,
+      analysis.value.rangeMax,
+    )
+
+    let existingFolderName: string | null = null
+    if (similar.length > 0) {
+      const choice = await askSimilarFolderChoice(similar)
+      if (choice === 'cancel') {
+        return
+      }
+      if (choice !== 'new') {
+        existingFolderName = choice
+      }
+    }
+
+    const seriesFolder = await prepareKoreanSeriesFolder(
+      seriesLabel,
+      analysis.value.rangeMin,
+      analysis.value.rangeMax,
+      existingFolderName,
+    )
+
+    emit('confirm', {
+      selectedItems,
+      rangeMin: analysis.value.rangeMin,
+      rangeMax: analysis.value.rangeMax,
+      tagLabel: analysis.value.tagLabel,
+      seriesFolder,
+    })
+    emit('update:showing', false)
+  } catch (err) {
+    txtDuplicateError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    submitting.value = false
+  }
 }
 
 watch(
@@ -180,7 +243,7 @@ watch(strategy, () => applyDefaultChecks())
       </div>
 
       <p class="k-folder-hint">
-        將下載至新資料夾：{{ analysis.tagLabel }}-{{ analysis.rangeMin }}~{{ analysis.rangeMax }}-完
+        將下載至資料夾：{{ analysis.tagLabel }}-{{ analysis.rangeMin }}~{{ analysis.rangeMax }}-完（已排除韓漫/漢化等前綴）
       </p>
 
       <div class="k-list">
@@ -216,10 +279,50 @@ watch(strategy, () => applyDefaultChecks())
         <button
           type="button"
           class="k-btn k-btn--ok"
-          :disabled="checkedIds.size === 0"
+          :disabled="checkedIds.size === 0 || submitting"
           @click.stop="confirmSelection"
         >
-          加入下載佇列
+          {{ submitting ? '處理中…' : '加入下載佇列' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div
+    v-if="similarFolderOpen"
+    class="k-dialog-overlay k-dialog-overlay--nested"
+    @click.self="finishSimilarFolderChoice('cancel')"
+    @touchstart.self="finishSimilarFolderChoice('cancel')"
+  >
+    <div class="k-dialog k-dialog--compact" @click.stop @touchstart.stop>
+      <p class="k-title">發現相似漫畫資料夾</p>
+      <p class="k-subtitle">
+        下載目錄中已有名稱相似的資料夾，請選擇新建或使用現有資料夾。
+      </p>
+      <div class="k-mode">
+        <label class="k-radio">
+          <input v-model="similarFolderChoice" type="radio" name="similar-folder" value="new" />
+          新建資料夾
+        </label>
+        <label v-for="name in similarFolderChoices" :key="name" class="k-radio">
+          <input v-model="similarFolderChoice" type="radio" name="similar-folder" :value="name" />
+          使用現有：{{ name }}
+        </label>
+      </div>
+      <div class="k-actions">
+        <button type="button" class="k-btn k-btn--ghost" @click.stop="finishSimilarFolderChoice('cancel')">
+          取消
+        </button>
+        <button
+          type="button"
+          class="k-btn k-btn--ok"
+          @click.stop="
+            finishSimilarFolderChoice(
+              similarFolderChoice === 'new' ? 'new' : similarFolderChoice,
+            )
+          "
+        >
+          確認
         </button>
       </div>
     </div>
@@ -236,6 +339,14 @@ watch(strategy, () => applyDefaultChecks())
   align-items: center;
   justify-content: center;
   padding: 12px;
+}
+
+.k-dialog-overlay--nested {
+  z-index: 1500;
+}
+
+.k-dialog--compact {
+  width: min(92vw, 420px);
 }
 
 .k-dialog {

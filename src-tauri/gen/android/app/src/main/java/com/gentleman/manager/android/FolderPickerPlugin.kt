@@ -170,6 +170,118 @@ class FolderPickerPlugin(private val activity: Activity) : Plugin(activity) {
         }.start()
     }
 
+    @Command
+    fun removeLineFromDocument(invoke: Invoke) {
+        val args = parseAppendLineArgs(invoke)
+        val uri = Uri.parse(args.uri)
+        val line = args.line.trim()
+        if (line.isEmpty()) {
+            invoke.reject("移除內容不可為空")
+            return
+        }
+        Thread {
+            try {
+                val input = activity.contentResolver.openInputStream(uri)
+                    ?: throw IllegalStateException("無法讀取 TXT 檔案")
+                val existing = input.bufferedReader().use { it.readText() }
+                val kept = existing.lines().filter { it.trim() != line }.toMutableList()
+                val removed = kept.size != existing.lines().count()
+                if (!removed) {
+                    val ret = JSObject()
+                    ret.put("removed", false)
+                    activity.runOnUiThread { invoke.resolve(ret) }
+                    return@Thread
+                }
+                while (kept.isNotEmpty() && kept.last().trim().isEmpty()) {
+                    kept.removeAt(kept.lastIndex)
+                }
+                val outputText = if (kept.isEmpty()) "" else kept.joinToString("\n") + "\n"
+                val output = activity.contentResolver.openOutputStream(uri, "wt")
+                    ?: throw IllegalStateException("無法寫入 TXT 檔案")
+                output.use { stream ->
+                    stream.write(outputText.toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                }
+                val ret = JSObject()
+                ret.put("removed", true)
+                activity.runOnUiThread { invoke.resolve(ret) }
+            } catch (ex: Exception) {
+                activity.runOnUiThread {
+                    invoke.reject(ex.message ?: "移除 TXT 行失敗")
+                }
+            }
+        }.start()
+    }
+
+    private fun isSeriesIncompleteArtifact(name: String, isDirectory: Boolean): Boolean {
+        if (isDirectory) {
+            return name.startsWith(".下載中-") || name.startsWith(".")
+        }
+        return name.endsWith(".part", ignoreCase = true) || name == "元數據.json"
+    }
+
+    private fun isSeriesCompletedContent(name: String, isDirectory: Boolean): Boolean {
+        if (isSeriesIncompleteArtifact(name, isDirectory)) return false
+        if (isDirectory) return true
+        return name.endsWith(".zip", ignoreCase = true)
+    }
+
+    private fun subdirectoryHasDownloadedContent(dir: DocumentFile): Boolean {
+        for (child in dir.listFiles() ?: emptyArray()) {
+            val name = child.name?.trim().orEmpty()
+            if (isSeriesCompletedContent(name, child.isDirectory)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    @Command
+    fun subdirectoryHasDownloadedContent(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(SubdirectoryArgs::class.java)
+            val root = DocumentFile.fromTreeUri(activity, Uri.parse(args.treeUri))
+                ?: throw IllegalStateException("無法讀取下載目錄")
+            val subdir = root.findFile(args.subdirectoryName.trim())
+                ?: throw IllegalStateException("找不到子目錄")
+            if (!subdir.isDirectory) {
+                throw IllegalStateException("不是資料夾")
+            }
+            val ret = JSObject()
+            ret.put("hasDownloadedContent", subdirectoryHasDownloadedContent(subdir))
+            invoke.resolve(ret)
+        } catch (ex: Exception) {
+            invoke.reject(ex.message ?: "檢查子目錄內容失敗")
+        }
+    }
+
+    @Command
+    fun tryRemoveEmptySubdirectory(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(SubdirectoryArgs::class.java)
+            val root = DocumentFile.fromTreeUri(activity, Uri.parse(args.treeUri))
+                ?: throw IllegalStateException("無法讀取下載目錄")
+            val subdirName = args.subdirectoryName.trim()
+            val subdir = root.findFile(subdirName)
+            val ret = JSObject()
+            if (subdir == null || !subdir.isDirectory) {
+                ret.put("removed", false)
+                invoke.resolve(ret)
+                return
+            }
+            if (subdirectoryHasDownloadedContent(subdir)) {
+                ret.put("removed", false)
+                invoke.resolve(ret)
+                return
+            }
+            val removed = subdir.delete()
+            ret.put("removed", removed)
+            invoke.resolve(ret)
+        } catch (ex: Exception) {
+            invoke.reject(ex.message ?: "刪除空子目錄失敗")
+        }
+    }
+
     private fun parseAppendLineArgs(invoke: Invoke): AppendLineArgs {
         val raw = invoke.getArgs()
         val uri = raw.getString("uri", "")?.trim().orEmpty()
@@ -814,6 +926,12 @@ class AppendLineArgs {
         this.uri = uri
         this.line = line
     }
+}
+
+@InvokeArg
+class SubdirectoryArgs {
+    var treeUri: String = ""
+    var subdirectoryName: String = ""
 }
 
 @InvokeArg

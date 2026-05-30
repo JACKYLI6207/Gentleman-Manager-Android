@@ -261,6 +261,16 @@ onMounted(() => void load())
 
 
 
+    <h3>下載失敗休息</h3>
+
+    <p class="hint">
+      任務進入「下載失敗」時暫停佇列 {{ config.downloadFailureRestSec }} 秒後自動繼續（0 表示關閉）
+    </p>
+
+    <input v-model.number="config.downloadFailureRestSec" type="range" min="0" max="600" @change="persist" />
+
+
+
     <h3>下載速度</h3>
 
     <p class="hint">同一時間僅一本漫畫實際下載；休息時間在該本完成後、下一本開始前生效</p>

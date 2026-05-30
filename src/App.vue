@@ -51,7 +51,6 @@ import {
   pickImportArchiveFile,
   readImportArchiveFile,
   writeCategorySnapshotFile,
-  prepareKoreanSeriesFolder,
   getComic,
   searchByKeyword,
   searchByTag,
@@ -2259,6 +2258,7 @@ async function onKoreanModeDialogConfirm(payload: {
   rangeMin: number
   rangeMax: number
   tagLabel: string
+  seriesFolder: string
 }) {
   try {
     const snapshots = await getDownloadTaskSnapshots()
@@ -2267,11 +2267,7 @@ async function onKoreanModeDialogConfirm(payload: {
         .filter((task) => task.state === 'Pending' || task.state === 'Downloading' || task.state === 'Paused')
         .map((task) => task.comic.id),
     )
-    const seriesFolder = await prepareKoreanSeriesFolder(
-      payload.tagLabel,
-      payload.rangeMin,
-      payload.rangeMax,
-    )
+    const seriesFolder = payload.seriesFolder
 
     let enqueued = 0
     let skipped = 0

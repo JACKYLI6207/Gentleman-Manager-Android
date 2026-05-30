@@ -361,25 +361,55 @@ fn list_download_subdirectory_names(app: &AppHandle, download_dir: &std::path::P
 
 /// 與 PC 版相同：`{系列名}-{起}~{迄}-完`；下載目錄已有任一子資料夾時為 `未分類N. {核心名}`。
 fn resolve_korean_series_folder_name(sibling_dir_names: &[String], core_name: &str) -> String {
-    let mut has_any_subdirectory = false;
-    let mut max_misc = 0u32;
+    crate::korean_series_folder::resolve_korean_series_folder_name(sibling_dir_names, core_name)
+}
 
-    for name in sibling_dir_names {
-        has_any_subdirectory = true;
-        if let Some(rest) = name.strip_prefix("未分類") {
-            if let Some((num_str, _)) = rest.split_once('.') {
-                if let Ok(n) = num_str.trim().parse::<u32>() {
-                    max_misc = max_misc.max(n);
-                }
-            }
-        }
+fn append_korean_folder_to_catalog_if_enabled(app: &AppHandle, folder_name: &str) {
+    let config_holder = app.get_config();
+    let config = config_holder.read();
+    if !config.korean_txt_duplicate_check_enabled {
+        return;
     }
+    let catalog_value = config.korean_txt_catalog_dir.to_string_lossy().to_string();
+    drop(config);
+    if catalog_value.trim().is_empty() {
+        return;
+    }
+    match crate::korean_txt_catalog::append_folder_line_to_catalog_with_app(
+        Some(app),
+        &catalog_value,
+        folder_name,
+    ) {
+        Ok(true) => tracing::info!(folder_name, "韓漫系列目錄已追加至 TXT 收藏列表"),
+        Ok(false) => {}
+        Err(err) => tracing::warn!(
+            folder_name,
+            message = %err,
+            "追加韓漫 TXT 收藏列表失敗"
+        ),
+    }
+}
 
-    if has_any_subdirectory {
-        format!("未分類{}. {core_name}", max_misc + 1)
-    } else {
-        core_name.to_string()
-    }
+#[allow(clippy::needless_pass_by_value)]
+#[tauri::command]
+#[specta::specta]
+pub fn list_similar_korean_series_folders(
+    app: AppHandle,
+    series_label: String,
+    episode_start: i32,
+    episode_end: i32,
+) -> CommandResult<Vec<String>> {
+    let download_dir = app.get_config().read().download_dir.clone();
+    let clean_label = crate::korean_series_folder::strip_series_label_meta(&series_label);
+    let siblings = list_download_subdirectory_names(&app, &download_dir);
+    let core_name =
+        crate::korean_series_folder::build_core_folder_name(&clean_label, episode_start, episode_end);
+    let planned_name = resolve_korean_series_folder_name(&siblings, &core_name);
+    let mut similar =
+        crate::korean_series_folder::find_similar_folder_names(&siblings, &clean_label);
+    similar.retain(|name| name != &planned_name);
+    tracing::debug!(count = similar.len(), "已找出相似韓漫系列資料夾");
+    Ok(similar)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -390,30 +420,49 @@ pub fn prepare_korean_series_folder(
     series_label: String,
     episode_start: i32,
     episode_end: i32,
+    existing_folder_name: Option<String>,
 ) -> CommandResult<String> {
     let download_dir = app.get_config().read().download_dir.clone();
-    let safe_label = filename_filter(&series_label);
-    let safe_label = if safe_label.is_empty() {
-        "韓漫系列".to_string()
-    } else {
-        safe_label
-    };
-    let core_name = format!("{safe_label}-{episode_start}~{episode_end}-完");
-
+    let clean_label = crate::korean_series_folder::strip_series_label_meta(&series_label);
+    let core_name =
+        crate::korean_series_folder::build_core_folder_name(&clean_label, episode_start, episode_end);
     let siblings = list_download_subdirectory_names(&app, &download_dir);
-    let folder_name = resolve_korean_series_folder_name(&siblings, &core_name);
+
+    let creating_new = existing_folder_name.is_none();
+    let folder_name = if let Some(existing) = existing_folder_name {
+        let trimmed = existing.trim();
+        if trimmed.is_empty() {
+            return Err(CommandError::from(
+                "現有資料夾名稱不可為空",
+                anyhow::anyhow!("empty existing folder name"),
+            ));
+        }
+        if !siblings.iter().any(|name| name == trimmed) {
+            return Err(CommandError::from(
+                &format!("下載目錄中找不到資料夾 `{trimmed}`"),
+                anyhow::anyhow!("existing folder not found"),
+            ));
+        }
+        trimmed.to_string()
+    } else {
+        resolve_korean_series_folder_name(&siblings, &core_name)
+    };
 
     // Android SAF：不在此預先 create_dir；實際寫入時由 copyFileToTree 建立子路徑。
     // 本機路徑則與 PC 相同先建立目錄，避免後續寫入失敗。
-    let full_path = download_dir.join(&folder_name);
-    if !full_path.to_string_lossy().starts_with("content://") {
-        std::fs::create_dir_all(&full_path).map_err(|err| {
-            CommandError::from(
-                &format!("創建韓漫系列目錄`{folder_name}`"),
-                anyhow::Error::from(err),
-            )
-        })?;
+    if creating_new {
+        let full_path = download_dir.join(&folder_name);
+        if !full_path.to_string_lossy().starts_with("content://") {
+            std::fs::create_dir_all(&full_path).map_err(|err| {
+                CommandError::from(
+                    &format!("創建韓漫系列目錄`{folder_name}`"),
+                    anyhow::Error::from(err),
+                )
+            })?;
+        }
     }
+
+    append_korean_folder_to_catalog_if_enabled(&app, &folder_name);
 
     tracing::debug!(folder = %folder_name, "韓漫系列目錄已就緒");
     Ok(folder_name)

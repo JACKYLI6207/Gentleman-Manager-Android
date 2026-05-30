@@ -264,6 +264,82 @@ pub fn append_folder_line_to_catalog_with_app(
     Ok(true)
 }
 
+#[cfg(target_os = "android")]
+fn remove_line_from_content_document(
+    app: &AppHandle,
+    uri: &str,
+    line: &str,
+) -> anyhow::Result<bool> {
+    let picker = crate::folder_picker::folder_picker(app)
+        .map_err(|e| anyhow::anyhow!(e.err_message))?;
+    picker
+        .remove_line_from_document(uri, line)
+        .map_err(|e| anyhow::anyhow!(e.err_message))
+}
+
+/// 從 TXT 列表移除指定資料夾名稱行（精確比對 trim 後內容）。
+pub fn remove_folder_line_from_catalog(
+    config_value: &str,
+    folder_line: &str,
+) -> anyhow::Result<bool> {
+    remove_folder_line_from_catalog_with_app(None, config_value, folder_line)
+}
+
+/// Android 上若設定為 `content://` 單一 TXT 檔，需傳入 `AppHandle` 以讀寫 SAF。
+pub fn remove_folder_line_from_catalog_with_app(
+    app: Option<&AppHandle>,
+    config_value: &str,
+    folder_line: &str,
+) -> anyhow::Result<bool> {
+    let trimmed = folder_line.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    for part in config_value
+        .split(PATH_LIST_SEPARATOR)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        #[cfg(target_os = "android")]
+        if part.starts_with("content://") && !is_content_tree_uri(part) {
+            let Some(app) = app else {
+                return Err(anyhow::anyhow!(
+                    "韓漫 TXT 檔案 URI 需要 App 環境才能移除寫入"
+                ));
+            };
+            return remove_line_from_content_document(app, part, trimmed);
+        }
+    }
+    let target = resolve_append_target_file(config_value)?;
+    let existing_raw = std::fs::read_to_string(&target).unwrap_or_default();
+    if existing_raw.is_empty() {
+        return Ok(false);
+    }
+    let mut removed = false;
+    let mut kept_lines: Vec<&str> = Vec::new();
+    for line in existing_raw.lines() {
+        if line.trim() == trimmed {
+            removed = true;
+        } else {
+            kept_lines.push(line);
+        }
+    }
+    if !removed {
+        return Ok(false);
+    }
+    while kept_lines.last().is_some_and(|line| line.trim().is_empty()) {
+        kept_lines.pop();
+    }
+    let mut new_content = kept_lines.join("\n");
+    if !new_content.is_empty() {
+        new_content.push('\n');
+    }
+    std::fs::write(&target, new_content)
+        .with_context(|| format!("無法寫入 TXT 檔 `{}`", target.display()))?;
+    tracing::info!(path = %target.display(), line = trimmed, "已從韓漫收藏列表移除");
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

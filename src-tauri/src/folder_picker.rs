@@ -235,6 +235,89 @@ impl<R: Runtime> FolderPicker<R> {
         Ok(())
     }
 
+    pub fn remove_line_from_document(
+        &self,
+        uri: &str,
+        line: &str,
+    ) -> crate::errors::CommandResult<bool> {
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            uri: &'a str,
+            line: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct RemovedResponse {
+            removed: bool,
+        }
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<RemovedResponse>(
+                "removeLineFromDocument",
+                Payload { uri, line },
+            )
+            .map_err(|e| crate::errors::CommandError::from("移除 TXT 行失敗", e))?;
+        Ok(res.removed)
+    }
+
+    pub fn subdirectory_has_downloaded_content(
+        &self,
+        tree_uri: &str,
+        subdirectory_name: &str,
+    ) -> crate::errors::CommandResult<bool> {
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            #[serde(rename = "treeUri")]
+            tree_uri: &'a str,
+            #[serde(rename = "subdirectoryName")]
+            subdirectory_name: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct HasContentResponse {
+            #[serde(rename = "hasDownloadedContent")]
+            has_downloaded_content: bool,
+        }
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<HasContentResponse>(
+                "subdirectoryHasDownloadedContent",
+                Payload {
+                    tree_uri,
+                    subdirectory_name,
+                },
+            )
+            .map_err(|e| crate::errors::CommandError::from("檢查子目錄內容失敗", e))?;
+        Ok(res.has_downloaded_content)
+    }
+
+    pub fn try_remove_empty_subdirectory(
+        &self,
+        tree_uri: &str,
+        subdirectory_name: &str,
+    ) -> crate::errors::CommandResult<bool> {
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            #[serde(rename = "treeUri")]
+            tree_uri: &'a str,
+            #[serde(rename = "subdirectoryName")]
+            subdirectory_name: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct RemovedResponse {
+            removed: bool,
+        }
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<RemovedResponse>(
+                "tryRemoveEmptySubdirectory",
+                Payload {
+                    tree_uri,
+                    subdirectory_name,
+                },
+            )
+            .map_err(|e| crate::errors::CommandError::from("刪除空子目錄失敗", e))?;
+        Ok(res.removed)
+    }
+
     pub fn cache_document_to_file(&self, uri: &str) -> crate::errors::CommandResult<String> {
         #[derive(serde::Serialize)]
         struct Payload<'a> {
