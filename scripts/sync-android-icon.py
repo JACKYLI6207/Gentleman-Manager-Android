@@ -1,4 +1,4 @@
-"""Regenerate Tauri/Android launcher icons from logo.png (or logo.ico fallback)."""
+"""Regenerate Tauri/Android launcher icons from app-icon.png (or local logo.ico / logo.png)."""
 from __future__ import annotations
 
 import shutil
@@ -16,11 +16,10 @@ ICONS_DIR = ROOT / "src-tauri" / "icons"
 
 
 def resolve_source_logo() -> Path:
-    if LOGO_PNG.is_file():
-        return LOGO_PNG
-    if LOGO_ICO.is_file():
-        return LOGO_ICO
-    raise FileNotFoundError(f"Missing {LOGO_PNG} or {LOGO_ICO}")
+    for candidate in (APP_ICON, LOGO_PNG, LOGO_ICO):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"Missing {APP_ICON}, {LOGO_PNG}, or {LOGO_ICO}")
 
 
 def main() -> int:

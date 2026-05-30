@@ -2,7 +2,14 @@ from pathlib import Path
 from PIL import Image
 
 root = Path(__file__).resolve().parents[1]
-logo = Image.open(root / "logo.png").convert("RGBA")
+for candidate in (root / "app-icon.png", root / "logo.png", root / "logo.ico"):
+    if candidate.is_file():
+        logo_path = candidate
+        break
+else:
+    raise SystemExit(f"Missing app-icon.png, logo.png, or logo.ico in {root}")
+
+logo = Image.open(logo_path).convert("RGBA")
 
 icons_dir = root / "src-tauri" / "icons"
 icons_dir.mkdir(parents=True, exist_ok=True)
@@ -39,4 +46,4 @@ for folder, size in {
     img.save(d / "ic_launcher_round.png")
     img.save(d / "ic_launcher_foreground.png")
 
-print("Icons generated from logo.png")
+print(f"Icons generated from {logo_path.name}")
