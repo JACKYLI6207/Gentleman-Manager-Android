@@ -43,6 +43,8 @@ export type Config = {
   downloadRetryCount: number
   koreanTxtCatalogDir: string
   koreanTxtDuplicateCheckEnabled: boolean
+  /** 快照更新掃描：舊 ID 重複超過此數後才可能提早停止（預設 20） */
+  snapshotUpdateDuplicateStopCount: number
 }
 
 export type ImgInImgList = {

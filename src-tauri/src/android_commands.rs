@@ -3,6 +3,7 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 use crate::errors::{CommandError, CommandResult};
+use crate::extensions::AppHandleExt;
 use crate::mobile_settings::MobileSettings;
 use crate::snapshot_catalog::{self, SnapshotCategoryHeader, SnapshotResumeCandidate};
 use crate::snapshot_scan_session::{
@@ -246,12 +247,22 @@ pub async fn snapshot_scan_merge_batch(
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn snapshot_scan_apply_update_page(
+    app: AppHandle,
     session_id: String,
     comics: Vec<crate::types::ComicInSearch>,
     cumulative_duplicate_hits: i64,
 ) -> CommandResult<SnapshotScanUpdatePageResult> {
+    let duplicate_stop_threshold = app
+        .get_config()
+        .read()
+        .snapshot_update_duplicate_stop_limit();
     tokio::task::spawn_blocking(move || {
-        snapshot_scan_session::apply_update_page(&session_id, comics, cumulative_duplicate_hits)
+        snapshot_scan_session::apply_update_page(
+            &session_id,
+            comics,
+            cumulative_duplicate_hits,
+            duplicate_stop_threshold,
+        )
     })
     .await
     .map_err(|e| CommandError::from("更新快照頁面失敗", e))?

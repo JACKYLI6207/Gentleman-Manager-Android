@@ -8,6 +8,16 @@ export type SearchSortOrder =
 
 export const DEFAULT_SEARCH_SORT_ORDER: SearchSortOrder = 'comicIdDesc'
 
+/** 官網即時列表分頁軸（與 HTML 列表順序一致，約 ID 降序） */
+export const WEBSITE_BROWSE_SORT_ORDER: SearchSortOrder = 'comicIdDesc'
+
+export const LIVE_BROWSE_CUSTOM_SORT_HINT =
+  '目前排序僅重排本頁，與官網分頁不一致；對照官網請選「ID編號降序」'
+
+export function isIdBasedSortOrder(order: SearchSortOrder): boolean {
+  return order === 'comicIdDesc' || order === 'comicIdAsc'
+}
+
 const SORT_KEY = 'gm-android-searchSortOrder'
 const PAGE_SIZE_KEY = 'gm-android-searchPageSize'
 const LAYOUT_KEY = 'gm-android-searchLayout'
@@ -26,8 +36,6 @@ export const SEARCH_SORT_OPTIONS: { label: string; key: SearchSortOrder }[] = [
   { label: 'ID編號升序', key: 'comicIdAsc' },
   { label: '創建日期降序', key: 'createDateDesc' },
   { label: '創建日期升序', key: 'createDateAsc' },
-  { label: '漫畫名稱降序', key: 'titleDesc' },
-  { label: '漫畫名稱升序', key: 'titleAsc' },
 ]
 
 export const LAYOUT_OPTIONS: { key: GridLayout; label: string }[] = [

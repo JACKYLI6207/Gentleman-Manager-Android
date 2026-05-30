@@ -244,6 +244,7 @@ pub fn apply_update_page(
     session_id: &str,
     comics: Vec<ComicInSearch>,
     cumulative_duplicate_hits: i64,
+    duplicate_stop_threshold: i64,
 ) -> anyhow::Result<SnapshotScanUpdatePageResult> {
     let mut guard = sessions_mut();
     let map = guard.as_mut().context("快照掃描工作階段未初始化")?;
@@ -272,7 +273,7 @@ pub fn apply_update_page(
         duplicate_hits,
         added_count,
         total_count,
-        should_stop: duplicate_hits > 20,
+        should_stop: duplicate_hits > duplicate_stop_threshold,
     })
 }
 

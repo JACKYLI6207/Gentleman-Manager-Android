@@ -327,6 +327,34 @@ onMounted(() => void load())
 
 
 
+    <h3>快照更新</h3>
+
+    <p class="hint">ID 更新式掃描：舊 ID 重複超過此數後，再連續 2 頁無新增才停止</p>
+
+    <label class="num-row">
+
+      <span>快照更新 ID 重複停止數</span>
+
+      <input
+
+        v-model.number="config.snapshotUpdateDuplicateStopCount"
+
+        type="number"
+
+        min="0"
+
+        max="9999"
+
+        step="1"
+
+        @change="persist"
+
+      />
+
+    </label>
+
+
+
     <p v-if="status" class="status">{{ status }}</p>
 
     <p v-if="saving" class="hint">儲存中…</p>
@@ -429,7 +457,9 @@ h3 {
 
 .radio-row,
 
-.check-row {
+.check-row,
+
+.num-row {
 
   display: flex;
 
@@ -440,6 +470,26 @@ h3 {
   font-size: 12px;
 
   margin-bottom: 6px;
+
+}
+
+.num-row input[type='number'] {
+
+  width: 72px;
+
+  margin-left: auto;
+
+  padding: 4px 6px;
+
+  border-radius: 4px;
+
+  border: 1px solid #5f6368;
+
+  background: #1e1e1e;
+
+  color: #e8eaed;
+
+  font-size: 12px;
 
 }
 

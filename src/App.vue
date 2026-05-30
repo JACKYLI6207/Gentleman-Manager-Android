@@ -77,6 +77,8 @@ import {
   loadSavedLayout,
   loadSavedPageSize,
   loadSavedSortOrder,
+  isIdBasedSortOrder,
+  LIVE_BROWSE_CUSTOM_SORT_HINT,
   PAGE_SIZE_OPTIONS,
   saveFavoritesLayout,
   saveFavoritesPageSize,
@@ -191,6 +193,9 @@ const allComics = ref<ComicInSearch[]>([])
 const comics = ref<ComicInSearch[]>([])
 /** 官網列表每頁約 20 筆（與 PC 版一致） */
 const SERVER_LIST_PAGE_SIZE = 20
+const PAGE_FETCH_DELAY_MS = 300
+let browsePageCache = new Map<number, SearchResult>()
+let browseFetchGeneration = 0
 /** 底部頁碼列顯示的「第幾頁」（依每頁顯示筆數切分總結果） */
 const viewPage = ref(1)
 /** 官網/API 請求的第幾頁（快照瀏覽時與 viewPage 相同） */
@@ -224,6 +229,27 @@ const pageSummary = computed(() => {
   if (totalCount.value <= 0) return '無結果'
   return `${viewPage.value}/${totalPages.value} 頁 · ${totalCount.value} 筆`
 })
+
+function isLiveWebsiteBrowse(): boolean {
+  const k = browseKind.value
+  return k !== 'none' && k !== 'snapshot'
+}
+
+const showBrowseSortHint = computed(
+  () =>
+    isLiveWebsiteBrowse() &&
+    !isIdBasedSortOrder(sortOrder.value) &&
+    subNav.value === 'search' &&
+    totalCount.value > 0,
+)
+
+function finishBrowseViewLoadStatus() {
+  if (isLiveWebsiteBrowse() && !isIdBasedSortOrder(sortOrder.value)) {
+    setStatus(LIVE_BROWSE_CUSTOM_SORT_HINT)
+  } else {
+    clearStatus()
+  }
+}
 
 /** 有列表結果且需要分頁控制時（與底部頁碼列相同條件） */
 const showSearchPager = computed(() => subNav.value === 'search' && totalCount.value > 0)
@@ -737,6 +763,7 @@ function commitSearchTabAfterLoad() {
 function startNewSearchTab() {
   persistActiveTab()
   activeSearchTabId.value = crypto.randomUUID()
+  clearBrowsePageCache()
   // 切換到新搜尋分頁時清空舊快取，避免新搜尋沿用前一個分頁結果。
   allComics.value = []
   comics.value = []
@@ -838,9 +865,7 @@ function restoreTab(tab: MobileSearchTab) {
     serverPage.value = viewPage.value
     applyClientView()
   } else if (browseKind.value !== 'none' && totalCount.value > 0) {
-    const [spStart] = serverPageRangeForView(viewPage.value)
-    serverChunkBase.value = spStart
-    serverPage.value = spStart
+    clearBrowsePageCache()
     void goViewPage(viewPage.value, true)
   } else {
     serverPage.value = 1
@@ -1305,11 +1330,13 @@ function applyClientView() {
 
   const serverOffset = (serverChunkBase.value - 1) * SERVER_LIST_PAGE_SIZE
   const localStart = globalStart - serverOffset
-  if (localStart < 0 || localStart >= sorted.length || wantedCount <= 0) {
+  if (localStart < 0 || wantedCount <= 0) {
     comics.value = []
     return
   }
-  comics.value = sorted.slice(localStart, localStart + wantedCount)
+  const pageItems = sliceMergedView(allComics.value, localStart, wantedCount)
+  comics.value = sortSearchComics(pageItems, sortOrder.value)
+  for (const c of pageItems) rememberComicMeta(c)
 }
 
 function effectiveTotalCount(result: SearchResult): number {
@@ -1346,6 +1373,7 @@ function shrinkTotalCountFromServerPage(serverPageNum: number, result: SearchRes
 
 function ingestSearchMetadata(result: SearchResult, requestedServerPage?: number) {
   const cachePage = requestedServerPage ?? result.currentPage
+  browsePageCache.set(cachePage, result)
   const total = effectiveTotalCount(result)
   if (!totalCountRefined.value || totalCount.value <= 0) {
     totalCount.value = Math.max(totalCount.value, total)
@@ -1382,15 +1410,37 @@ function maxServerListPage(): number {
   return Math.max(1, Math.ceil(totalCount.value / SERVER_LIST_PAGE_SIZE))
 }
 
-function mergeComicsDedupeById(items: ComicInSearch[]): ComicInSearch[] {
-  const seen = new Set<number>()
-  const out: ComicInSearch[] = []
-  for (const c of items) {
-    if (seen.has(c.id)) continue
-    seen.add(c.id)
-    out.push(c)
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function clearBrowsePageCache() {
+  browsePageCache.clear()
+  browseFetchGeneration++
+}
+
+/** 合併官網多頁；僅在「跨頁邊界」去掉重複首筆，頁內與快照/官網 HTML 一致 */
+function mergeServerPageComics(spStart: number, spEnd: number): ComicInSearch[] {
+  const merged: ComicInSearch[] = []
+  for (let p = spStart; p <= spEnd; p++) {
+    const cached = browsePageCache.get(p)
+    if (cached === undefined) continue
+    let pageComics = cached.comics
+    if (
+      merged.length > 0 &&
+      pageComics.length > 0 &&
+      merged[merged.length - 1]!.id === pageComics[0]!.id
+    ) {
+      pageComics = pageComics.slice(1)
+    }
+    merged.push(...pageComics)
   }
-  return out
+  return merged
+}
+
+/** 依全局索引從合併段切 UI 頁（不去重，與快照/官網列表一致） */
+function sliceMergedView(merged: ComicInSearch[], offset: number, wantedCount: number): ComicInSearch[] {
+  return merged.slice(offset, offset + wantedCount)
 }
 
 function cachedChunkCoversView(vp: number): boolean {
@@ -1400,9 +1450,12 @@ function cachedChunkCoversView(vp: number): boolean {
     totalCount.value > 0
       ? Math.min(startIdx + pageSize.value, totalCount.value)
       : startIdx + pageSize.value
-  const chunkStart = (serverChunkBase.value - 1) * SERVER_LIST_PAGE_SIZE
-  const chunkEnd = chunkStart + allComics.value.length
-  return startIdx >= chunkStart && endIdx <= chunkEnd
+  const wantedCount = endIdx - startIdx
+  if (wantedCount <= 0) return false
+  const [spStart] = serverPageRangeForView(vp)
+  if (serverChunkBase.value !== spStart) return false
+  const offset = startIdx - (spStart - 1) * SERVER_LIST_PAGE_SIZE
+  return sliceMergedView(allComics.value, offset, wantedCount).length >= wantedCount
 }
 
 async function fetchBrowseResult(page: number): Promise<SearchResult> {
@@ -1457,6 +1510,89 @@ async function refreshCategoryHeaders() {
   }
 }
 
+async function loadBrowseViewChunk(vp: number) {
+  if (loading.value) return
+  if (browseKind.value === 'none') {
+    setStatus('請先選擇分類或搜尋')
+    return
+  }
+
+  const gen = browseFetchGeneration
+  const startIdx = (vp - 1) * pageSize.value
+  const endIdx =
+    totalCount.value > 0
+      ? Math.min(vp * pageSize.value, totalCount.value)
+      : startIdx + pageSize.value
+  if (totalCount.value > 0 && startIdx >= totalCount.value) return
+
+  const wantedCount = endIdx - startIdx
+  const [spStart, spEndInitial] = serverPageRangeForView(vp)
+  const offset = startIdx - (spStart - 1) * SERVER_LIST_PAGE_SIZE
+  // 至少多載 1 個官網頁，供邊界去重後補滿本 UI 頁
+  let spEnd = spEndInitial + 1
+
+  loading.value = true
+  loadingHint.value = '正在載入…'
+  try {
+    let hadNetworkFetch = false
+    while (true) {
+      if (gen !== browseFetchGeneration) return
+
+      const safeEnd = totalCount.value > 0 ? Math.min(spEnd, maxServerListPage()) : spEnd
+      for (let p = spStart; p <= safeEnd; p++) {
+        if (totalCount.value > 0 && p > maxServerListPage()) break
+        if (browsePageCache.has(p)) continue
+        if (hadNetworkFetch) await sleep(PAGE_FETCH_DELAY_MS)
+        if (gen !== browseFetchGeneration) return
+        loadingHint.value = `載入第 ${p} 頁…`
+        const result = await fetchBrowseResult(p)
+        if (gen !== browseFetchGeneration) return
+        ingestSearchMetadata(result, p)
+        hadNetworkFetch = true
+      }
+
+      if (totalCount.value <= 0) {
+        const cachedFirst = browsePageCache.get(1)
+        if (cachedFirst !== undefined && cachedFirst.comics.length > 0) {
+          totalCount.value = effectiveTotalCount(cachedFirst)
+        }
+      }
+
+      const merged = mergeServerPageComics(spStart, safeEnd)
+      const slice = sliceMergedView(merged, offset, wantedCount)
+      if (slice.length >= wantedCount) {
+        allComics.value = merged
+        serverChunkBase.value = spStart
+        serverPage.value = safeEnd
+        applyClientView()
+        finishBrowseViewLoadStatus()
+        commitSearchTabAfterLoad()
+        return
+      }
+
+      if (totalCount.value > 0 && spEnd >= maxServerListPage()) {
+        allComics.value = merged
+        serverChunkBase.value = spStart
+        serverPage.value = safeEnd
+        applyClientView()
+        finishBrowseViewLoadStatus()
+        commitSearchTabAfterLoad()
+        return
+      }
+
+      spEnd++
+      if (totalCount.value <= 0 && spEnd > spStart + 20) break
+    }
+  } catch (e) {
+    setStatus(e)
+    allComics.value = []
+    comics.value = []
+  } finally {
+    loading.value = false
+    loadingHint.value = ''
+  }
+}
+
 async function loadServerPage(page: number) {
   if (loading.value) return
   if (browseKind.value === 'none') {
@@ -1480,91 +1616,57 @@ async function loadServerPage(page: number) {
   }
 }
 
-async function loadServerPageRange(spStart: number, spEnd: number) {
-  if (loading.value) return
-  if (browseKind.value === 'none') {
-    setStatus('請先選擇分類或搜尋')
-    return
-  }
-
-  loading.value = true
-  loadingHint.value = '正在載入…'
-  try {
-    const merged: ComicInSearch[] = []
-    // 總數尚未知時勿 cap 為 1 頁（否則每頁 100 只會載入 20 筆）
-    const safeEnd =
-      totalCount.value > 0 ? Math.min(spEnd, maxServerListPage()) : spEnd
-    for (let p = spStart; p <= safeEnd; p++) {
-      loadingHint.value = `載入第 ${p} 頁…`
-      const result = await fetchBrowseResult(p)
-      merged.push(...result.comics)
-      ingestSearchMetadata(result, p)
-    }
-    allComics.value = mergeComicsDedupeById(merged)
-    serverChunkBase.value = spStart
-    serverPage.value = spEnd
-    applyClientView()
-    clearStatus()
-    commitSearchTabAfterLoad()
-  } catch (e) {
-    setStatus(e)
-    allComics.value = []
-    comics.value = []
-  } finally {
-    loading.value = false
-    loadingHint.value = ''
-  }
-}
-
 async function ensureServerDataForView(vp: number) {
-  const [spStart, spEnd] = serverPageRangeForView(vp)
   if (cachedChunkCoversView(vp)) {
     applyClientView()
     return
   }
-  if (spStart === spEnd) await loadServerPage(spStart)
-  else await loadServerPageRange(spStart, spEnd)
+  await loadBrowseViewChunk(vp)
 }
 
-/** 新分頁／新搜尋：依「每頁顯示」載入足夠官網頁（>20 時會合併多頁） */
+/** 新分頁／新搜尋：只載入目前 UI 頁需要的官網頁 */
 async function loadBrowseFromStart() {
+  clearBrowsePageCache()
   totalCountRefined.value = false
   viewPage.value = 1
   serverPage.value = 1
   serverChunkBase.value = 1
-  if (pageSize.value === SERVER_LIST_PAGE_SIZE) {
-    await loadServerPage(1)
-    return
-  }
-  await ensureServerDataForView(1)
+  await loadBrowseViewChunk(1)
 }
 
 async function goViewPage(vp: number, force = false) {
   if (loading.value) return
-  if (totalCount.value <= 0) return
-
-  const maxVp = Math.max(1, Math.ceil(totalCount.value / pageSize.value))
-  const target = Math.max(1, Math.min(vp, maxVp))
-  if (!force && target === viewPage.value && comics.value.length > 0) return
-
-  viewPage.value = target
 
   if (browseKind.value === 'snapshot') {
+    if (totalCount.value <= 0) return
+    const maxVp = Math.max(1, Math.ceil(totalCount.value / pageSize.value))
+    const target = Math.max(1, Math.min(vp, maxVp))
+    if (!force && target === viewPage.value && comics.value.length > 0) return
+    viewPage.value = target
     serverPage.value = target
     applyClientView()
     persistActiveTab()
     return
   }
 
+  if (totalCount.value <= 0) {
+    const cachedFirst = browsePageCache.get(1)
+    if (cachedFirst !== undefined && cachedFirst.comics.length > 0) {
+      totalCount.value = effectiveTotalCount(cachedFirst)
+    } else if (!force) {
+      return
+    }
+  }
+
+  const maxVp =
+    totalCount.value > 0 ? Math.max(1, Math.ceil(totalCount.value / pageSize.value)) : Math.max(1, vp)
+  const target = Math.max(1, Math.min(vp, maxVp))
+  if (!force && target === viewPage.value && comics.value.length > 0) return
+
+  viewPage.value = target
   recoverBrowseKindIfNeeded()
   if (browseKind.value === 'none') {
     setStatus('目前搜尋狀態已失效，請重新執行搜尋')
-    return
-  }
-
-  if (pageSize.value === SERVER_LIST_PAGE_SIZE) {
-    await loadServerPage(target)
-    persistActiveTab()
     return
   }
 
@@ -1778,7 +1880,11 @@ function onSortSelect(order: SearchSortOrder) {
   saveSortOrder(order)
   sortMenuOpen.value = false
   applyClientView()
-  clearStatus()
+  if (isLiveWebsiteBrowse() && !isIdBasedSortOrder(order)) {
+    setStatus(LIVE_BROWSE_CUSTOM_SORT_HINT)
+  } else {
+    clearStatus()
+  }
   persistActiveTab()
 }
 
@@ -2523,7 +2629,8 @@ onUnmounted(() => {
         />
 
         <p v-if="loading && loadingHint" class="status status--hint">{{ loadingHint }}</p>
-        <p v-if="showStatusLine && statusMessage" class="status">{{ statusMessage }}</p>
+        <p v-else-if="showBrowseSortHint" class="status status--hint">{{ LIVE_BROWSE_CUSTOM_SORT_HINT }}</p>
+        <p v-else-if="showStatusLine && statusMessage" class="status">{{ statusMessage }}</p>
       </div>
 
       <div v-if="subNav === 'search'" class="comic-scroll">

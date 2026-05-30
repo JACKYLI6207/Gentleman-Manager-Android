@@ -33,6 +33,8 @@ pub struct Config {
     pub korean_txt_catalog_dir: PathBuf,
     /// 開啟韓漫下載模式時是否自動比對 TXT 列表
     pub korean_txt_duplicate_check_enabled: bool,
+    /// 快照更新掃描：舊 ID 重複超過此數後才可能提早停止（預設 20）
+    pub snapshot_update_duplicate_stop_count: u32,
 }
 
 impl Config {
@@ -117,6 +119,7 @@ impl Config {
             download_retry_count: 1,
             korean_txt_catalog_dir: PathBuf::new(),
             korean_txt_duplicate_check_enabled: true,
+            snapshot_update_duplicate_stop_count: 20,
         }
     }
 }
@@ -125,6 +128,11 @@ impl Config {
     /// 下載請求總嘗試次數（至少 1 次，至多 21 次）
     pub fn download_max_attempts(&self) -> u32 {
         self.download_retry_count.saturating_add(1).clamp(1, 21)
+    }
+
+    /// 快照更新 ID 重複停止閾值（與 PC 相同，至少 0）
+    pub fn snapshot_update_duplicate_stop_limit(&self) -> i64 {
+        self.snapshot_update_duplicate_stop_count.min(9999) as i64
     }
 }
 

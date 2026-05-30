@@ -3,6 +3,7 @@ import { formatInvokeError } from './invokeError'
 import {
   browseAlbumsList,
   browseByCategory,
+  getConfig,
   snapshotScanApplyUpdatePage,
   snapshotScanBegin,
   snapshotScanDispose,
@@ -207,9 +208,15 @@ async function fetchSnapshotPage(
 /** 官網列表每頁 20 本（與 PC SERVER_PAGE_SIZE 相同） */
 const SERVER_PAGE_SIZE = 20
 
-/** 舊 ID 重複超過此值後，須再連續 N 頁無新增才允許停止更新掃描 */
-const UPDATE_DUP_STOP_THRESHOLD = 20
+const DEFAULT_UPDATE_DUP_STOP_THRESHOLD = 20
+/** 舊 ID 重複超過設定值後，須再連續 N 頁無新增才允許停止更新掃描 */
 const UPDATE_ZERO_ADD_STOP_STREAK = 2
+
+function normalizeUpdateDupStopThreshold(value: number | null | undefined): number {
+  const n = Math.floor(Number(value ?? DEFAULT_UPDATE_DUP_STOP_THRESHOLD))
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_UPDATE_DUP_STOP_THRESHOLD
+  return Math.min(n, 9999)
+}
 
 /** 保守模式：僅模擬手點逐頁請求（無並行），每頁間隔 0.5～1.5 秒 */
 const TAP_DELAY_MS = { min: 500, max: 1500 } as const
@@ -389,6 +396,9 @@ export async function scanCategorySnapshot(
     }
 
     if (options.mode === 'update') {
+      const updateDupStopThreshold = normalizeUpdateDupStopThreshold(
+        (await getConfig()).snapshotUpdateDuplicateStopCount,
+      )
       let duplicateHits = 0
       let addedTotal = 0
       let updateInterrupted = false
@@ -423,7 +433,7 @@ export async function scanCategorySnapshot(
         }
         const r = await applyUpdatePageResult(page, result.comics)
 
-        if (duplicateHits > UPDATE_DUP_STOP_THRESHOLD) pastDupThreshold = true
+        if (duplicateHits > updateDupStopThreshold) pastDupThreshold = true
         if (pastDupThreshold) {
           zeroAddStreak = r.addedCount <= 0 ? zeroAddStreak + 1 : 0
           // 須在本頁成功寫入後才判斷停止，確保每一頁都實際請求過
