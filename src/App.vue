@@ -13,6 +13,15 @@ import MobileSnapshotResumeDialog from './components/MobileSnapshotResumeDialog.
 import SearchResultTabBar from './components/SearchResultTabBar.vue'
 import { formatComicCreatedLabel } from './comicMeta'
 import { loadFavoriteComics, saveFavoriteComics } from './favoritesStorage'
+import {
+  buildFavoriteComicsExportFile,
+  buildFavoriteTabsExportFile,
+  favoriteComicsArchiveFileName,
+  favoriteTabsArchiveFileName,
+  parseFavoriteComicsImport,
+  parseFavoriteTabsImport,
+  serializeFavoriteArchive,
+} from './favoritesArchive'
 import { bookmarkToMobileTab, mobileTabToBookmark } from './mobileTabBookmarkBridge'
 import { loadFavoriteSearchTabs, saveFavoriteSearchTabs } from './searchTabBookmarksStorage'
 import type { SearchTabBookmark } from './searchTabBookmarkTypes'
@@ -39,6 +48,9 @@ import {
   pickCategoryDirectory,
   type SnapshotResumeCandidate,
   pickDownloadDirectory,
+  pickImportArchiveFile,
+  readImportArchiveFile,
+  writeCategorySnapshotFile,
   prepareKoreanSeriesFolder,
   getComic,
   searchByKeyword,
@@ -397,6 +409,8 @@ const showFavoritesPager = computed(
   () => subNav.value === 'favorites' && favoritesSection.value === 'comics' && favoriteComics.value.length > 0,
 )
 
+const showFavoritesToolbar = computed(() => subNav.value === 'favorites')
+
 const favPageTabNumbers = computed(() => {
   const tp = favTotalPages.value
   const n = favoriteComics.value.length
@@ -441,6 +455,8 @@ const favPageJumpOpen = ref(false)
 const pageGoForFavorites = ref(false)
 const pageGoInput = ref<string>('')
 const downloadAllConfirmOpen = ref(false)
+const downloadAllFavoritesConfirmOpen = ref(false)
+const clearFavoritesConfirmOpen = ref(false)
 const batchDownloadMenuOpen = ref(false)
 const koreanModeDialogOpen = ref(false)
 const koreanModeDialogComics = ref<ComicInSearch[]>([])
@@ -1930,6 +1946,153 @@ function confirmDownloadAll() {
   void downloadAllPage()
 }
 
+async function downloadAllFavoriteComics() {
+  try {
+    if (favoriteComics.value.length === 0) {
+      setStatus('收藏漫畫沒有可下載項目')
+      return
+    }
+
+    const config = await getConfig()
+    if ((config.downloadDir ?? '').trim() === '') {
+      setStatus('請先到設定指定下載目錄')
+      activeTab.value = 'settings'
+      return
+    }
+
+    const snapshots = await getDownloadTaskSnapshots()
+    const inQueueIds = new Set(
+      snapshots
+        .filter((task) => task.state === 'Pending' || task.state === 'Downloading' || task.state === 'Paused')
+        .map((task) => task.comic.id),
+    )
+
+    let enqueued = 0
+    let skipped = 0
+    let failed = 0
+    for (const c of favoriteComics.value) {
+      if (c.isDownloaded || inQueueIds.has(c.id)) {
+        skipped++
+        continue
+      }
+      try {
+        await createDownloadTask(buildDownloadTaskSeedFromSearch(c))
+        inQueueIds.add(c.id)
+        enqueued++
+      } catch {
+        failed++
+      }
+    }
+
+    setStatus(`收藏全部下載：已加入 ${enqueued}，略過 ${skipped}，失敗 ${failed}`)
+    if (enqueued > 0) {
+      activeTab.value = 'download'
+    }
+  } catch (e) {
+    setStatus(formatStatusMessage(e))
+  }
+}
+
+function requestDownloadAllFavoriteComics() {
+  if (favoriteComics.value.length === 0) {
+    setStatus('收藏漫畫沒有可下載項目')
+    return
+  }
+  downloadAllFavoritesConfirmOpen.value = true
+}
+
+function cancelDownloadAllFavoritesConfirm() {
+  downloadAllFavoritesConfirmOpen.value = false
+}
+
+function confirmDownloadAllFavorites() {
+  downloadAllFavoritesConfirmOpen.value = false
+  void downloadAllFavoriteComics()
+}
+
+async function exportFavoriteArchive() {
+  try {
+    const dir = await pickCategoryDirectory()
+    if (!dir) return
+
+    if (favoritesSection.value === 'comics') {
+      if (favoriteComics.value.length === 0) {
+        setStatus('收藏漫畫尚無紀錄可導出')
+        return
+      }
+      const content = serializeFavoriteArchive(buildFavoriteComicsExportFile(favoriteComics.value))
+      const written = await writeCategorySnapshotFile(dir, favoriteComicsArchiveFileName(), content)
+      setStatus(`已導出收藏漫畫：${written.split(/[/\\]/).pop() ?? written}`)
+      return
+    }
+
+    if (favoriteSearchTabs.value.length === 0) {
+      setStatus('收藏分頁尚無紀錄可導出')
+      return
+    }
+    const content = serializeFavoriteArchive(buildFavoriteTabsExportFile(favoriteSearchTabs.value))
+    const written = await writeCategorySnapshotFile(dir, favoriteTabsArchiveFileName(), content)
+    setStatus(`已導出收藏分頁：${written.split(/[/\\]/).pop() ?? written}`)
+  } catch (e) {
+    setStatus(formatStatusMessage(e))
+  }
+}
+
+async function importFavoriteArchive() {
+  try {
+    const path = await pickImportArchiveFile()
+    if (!path) return
+    const raw = await readImportArchiveFile(path)
+
+    if (favoritesSection.value === 'comics') {
+      const comics = parseFavoriteComicsImport(raw)
+      favoriteComics.value = comics
+      saveFavoriteComics(comics)
+      favViewPage.value = 1
+      setStatus(`已匯入收藏漫畫：${comics.length} 筆（已覆蓋舊紀錄）`)
+      return
+    }
+
+    const bookmarks = parseFavoriteTabsImport(raw)
+    favoriteSearchTabs.value = bookmarks
+    saveFavoriteSearchTabs(bookmarks)
+    setStatus(`已匯入收藏分頁：${bookmarks.length} 筆（已覆蓋舊紀錄）`)
+  } catch (e) {
+    setStatus(formatStatusMessage(e))
+  }
+}
+
+function requestClearFavorites() {
+  if (favoritesSection.value === 'comics') {
+    if (favoriteComics.value.length === 0) {
+      setStatus('收藏漫畫尚無紀錄')
+      return
+    }
+  } else if (favoriteSearchTabs.value.length === 0) {
+    setStatus('收藏分頁尚無紀錄')
+    return
+  }
+  clearFavoritesConfirmOpen.value = true
+}
+
+function cancelClearFavoritesConfirm() {
+  clearFavoritesConfirmOpen.value = false
+}
+
+function confirmClearFavorites() {
+  clearFavoritesConfirmOpen.value = false
+  if (favoritesSection.value === 'comics') {
+    favoriteComics.value = []
+    saveFavoriteComics([])
+    favViewPage.value = 1
+    setStatus('已清除收藏漫畫')
+    return
+  }
+  favoriteSearchTabs.value = []
+  saveFavoriteSearchTabs([])
+  setStatus('已清除收藏分頁')
+}
+
 function getKoreanCandidates() {
   return allComics.value.filter(
     (c) => c.listCateId === 20 || c.listCateId === 21 || /韓|韩/.test(c.title),
@@ -2609,49 +2772,85 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        <div v-if="showFavoritesPager" class="list-toolbar" @click.stop>
-          <div class="list-toolbar-left" />
-          <div class="list-toolbar-right">
-            <div class="menu-wrap">
-              <button type="button" class="tool tool--mini" @click.stop="favLayoutMenuOpen = !favLayoutMenuOpen">{{ favLayoutLabel }}</button>
-              <div v-if="favLayoutMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
-                <button
-                  v-for="opt in LAYOUT_OPTIONS"
-                  :key="'fav-layout-' + opt.key"
-                  type="button"
-                  :class="{ on: favGridLayout === opt.key }"
-                  @click="onFavLayoutSelect(opt.key)"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
+        <div v-if="showFavoritesToolbar" class="fav-bottom-toolbars" @click.stop>
+          <div class="list-toolbar list-toolbar--fav-row">
+            <div class="list-toolbar-right">
+              <button
+                type="button"
+                class="tool tool--mini tool--fit"
+                :disabled="favoritesSection === 'comics' ? favoriteComics.length === 0 : favoriteSearchTabs.length === 0"
+                @click.stop="exportFavoriteArchive"
+              >
+                導出
+              </button>
+              <button type="button" class="tool tool--mini tool--fit" @click.stop="importFavoriteArchive">
+                匯入
+              </button>
+              <button
+                type="button"
+                class="tool tool--mini tool--fit"
+                :disabled="favoritesSection === 'comics' ? favoriteComics.length === 0 : favoriteSearchTabs.length === 0"
+                @click.stop="requestClearFavorites"
+              >
+                清除
+              </button>
             </div>
-            <div class="menu-wrap">
-              <button type="button" class="tool tool--mini" @click.stop="favPageSizeMenuOpen = !favPageSizeMenuOpen">{{ favPageSizeLabel }}</button>
-              <div v-if="favPageSizeMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
-                <button
-                  v-for="n in PAGE_SIZE_OPTIONS"
-                  :key="'fav-ps-' + n"
-                  type="button"
-                  :class="{ on: favPageSize === n }"
-                  @click.stop="onFavPageSizeSelect(n)"
-                >
-                  每頁 {{ n }}
-                </button>
-              </div>
+          </div>
+          <div
+            v-if="favoritesSection === 'comics' && favoriteComics.length > 0"
+            class="list-toolbar list-toolbar--fav-row"
+          >
+            <div class="list-toolbar-left list-toolbar-left--nowrap">
+              <button
+                type="button"
+                class="tool tool--primary tool--fit"
+                @click.stop="requestDownloadAllFavoriteComics"
+              >
+                全部下載
+              </button>
             </div>
-            <div class="menu-wrap">
-              <button type="button" class="tool tool--mini" @click.stop="favSortMenuOpen = !favSortMenuOpen">{{ favSortLabel }}</button>
-              <div v-if="favSortMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
-                <button
-                  v-for="opt in SEARCH_SORT_OPTIONS"
-                  :key="'fav-sort-' + opt.key"
-                  type="button"
-                  :class="{ on: favSortOrder === opt.key }"
-                  @click="onFavSortSelect(opt.key)"
-                >
-                  {{ opt.label }}
-                </button>
+            <div class="list-toolbar-right">
+              <div class="menu-wrap">
+                <button type="button" class="tool tool--mini" @click.stop="favLayoutMenuOpen = !favLayoutMenuOpen">{{ favLayoutLabel }}</button>
+                <div v-if="favLayoutMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
+                  <button
+                    v-for="opt in LAYOUT_OPTIONS"
+                    :key="'fav-layout-' + opt.key"
+                    type="button"
+                    :class="{ on: favGridLayout === opt.key }"
+                    @click="onFavLayoutSelect(opt.key)"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="menu-wrap">
+                <button type="button" class="tool tool--mini" @click.stop="favPageSizeMenuOpen = !favPageSizeMenuOpen">{{ favPageSizeLabel }}</button>
+                <div v-if="favPageSizeMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
+                  <button
+                    v-for="n in PAGE_SIZE_OPTIONS"
+                    :key="'fav-ps-' + n"
+                    type="button"
+                    :class="{ on: favPageSize === n }"
+                    @click.stop="onFavPageSizeSelect(n)"
+                  >
+                    每頁 {{ n }}
+                  </button>
+                </div>
+              </div>
+              <div class="menu-wrap">
+                <button type="button" class="tool tool--mini" @click.stop="favSortMenuOpen = !favSortMenuOpen">{{ favSortLabel }}</button>
+                <div v-if="favSortMenuOpen" class="dropdown-menu drop-up menu-right" @click.stop>
+                  <button
+                    v-for="opt in SEARCH_SORT_OPTIONS"
+                    :key="'fav-sort-' + opt.key"
+                    type="button"
+                    :class="{ on: favSortOrder === opt.key }"
+                    @click="onFavSortSelect(opt.key)"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2864,6 +3063,68 @@ onUnmounted(() => {
               @click.stop="confirmDownloadAll"
             >
               確定下載
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        v-if="downloadAllFavoritesConfirmOpen"
+        class="page-go-overlay"
+        @click.self="cancelDownloadAllFavoritesConfirm"
+        @touchstart.self="cancelDownloadAllFavoritesConfirm"
+      >
+        <div class="page-go-dialog" @click.stop @touchstart.stop>
+          <p class="page-go-title">確認全部下載</p>
+          <p class="download-confirm-text">
+            即將把收藏漫畫內 {{ favoriteComics.length }} 筆全部加入下載佇列（含全部頁數），是否繼續？
+          </p>
+          <div class="page-go-actions">
+            <button
+              type="button"
+              class="page-go-btn page-go-btn--ghost"
+              @click.stop="cancelDownloadAllFavoritesConfirm"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="page-go-btn page-go-btn--ok"
+              @click.stop="confirmDownloadAllFavorites"
+            >
+              確定下載
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        v-if="clearFavoritesConfirmOpen"
+        class="page-go-overlay"
+        @click.self="cancelClearFavoritesConfirm"
+        @touchstart.self="cancelClearFavoritesConfirm"
+      >
+        <div class="page-go-dialog" @click.stop @touchstart.stop>
+          <p class="page-go-title">確認清除</p>
+          <p class="download-confirm-text">
+            {{
+              favoritesSection === 'comics'
+                ? `確定要清除收藏漫畫內的 ${favoriteComics.length} 筆紀錄嗎？`
+                : `確定要清除收藏分頁內的 ${favoriteSearchTabs.length} 筆紀錄嗎？`
+            }}
+          </p>
+          <div class="page-go-actions">
+            <button
+              type="button"
+              class="page-go-btn page-go-btn--ghost"
+              @click.stop="cancelClearFavoritesConfirm"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="page-go-btn page-go-btn--ok"
+              @click.stop="confirmClearFavorites"
+            >
+              確定清除
             </button>
           </div>
         </div>
@@ -3228,12 +3489,30 @@ onUnmounted(() => {
   background: #141414;
 }
 
+.fav-bottom-toolbars {
+  border-top: 1px solid #333;
+  background: #141414;
+}
+
+.fav-bottom-toolbars .list-toolbar--fav-row {
+  border-top: none;
+}
+
+.fav-bottom-toolbars .list-toolbar--fav-row + .list-toolbar--fav-row {
+  border-top: 1px solid #2a2a2a;
+}
+
 .list-toolbar-left {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
+}
+
+.list-toolbar-left--nowrap {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 
 .list-toolbar-right {
@@ -3249,6 +3528,14 @@ onUnmounted(() => {
   padding: 4px 6px;
   font-size: 9px;
   white-space: nowrap;
+}
+
+.tool--fit {
+  width: auto;
+  min-width: 0;
+  padding-inline: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool {

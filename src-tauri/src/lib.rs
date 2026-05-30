@@ -50,6 +50,8 @@ pub fn run() {
             pick_category_directory,
             pick_download_directory,
             pick_korean_txt_file,
+            pick_import_archive_file,
+            read_import_archive_file,
             pick_local_reader_zip,
             pick_local_reader_folder,
             list_snapshot_category_headers,

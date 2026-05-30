@@ -181,6 +181,14 @@ export function pickKoreanTxtFile() {
   return invoke<string | null>('pick_korean_txt_file')
 }
 
+export function pickImportArchiveFile() {
+  return invoke<string | null>('pick_import_archive_file')
+}
+
+export function readImportArchiveFile(path: string) {
+  return invoke<string>('read_import_archive_file', { path })
+}
+
 export function listSnapshotCategoryHeaders(categoryDirectory: string) {
   return invoke<SnapshotCategoryHeader[]>('list_snapshot_category_headers', { categoryDirectory })
 }

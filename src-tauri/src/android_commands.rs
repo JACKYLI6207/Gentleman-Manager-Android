@@ -64,6 +64,40 @@ pub async fn pick_category_directory(app: AppHandle) -> CommandResult<Option<Str
 
 #[tauri::command]
 #[specta::specta]
+pub async fn pick_import_archive_file(app: AppHandle) -> CommandResult<Option<String>> {
+    #[cfg(target_os = "android")]
+    {
+        let picker = folder_picker(&app)?;
+        return Ok(picker.pick_open_txt()?);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err(CommandError::from(
+            "不支援的平台",
+            anyhow::anyhow!("僅 Android 可選擇存檔檔案"),
+        ))
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn read_import_archive_file(app: AppHandle, path: String) -> CommandResult<String> {
+    #[cfg(target_os = "android")]
+    if path.starts_with("content://") {
+        let picker = folder_picker(&app)?;
+        return picker.read_text(&path);
+    }
+    std::fs::read_to_string(&path).map_err(|err| {
+        CommandError::from(
+            "讀取存檔失敗",
+            anyhow::anyhow!("讀取存檔`{path}`失敗: {err}"),
+        )
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn pick_korean_txt_file(app: AppHandle) -> CommandResult<Option<String>> {
     #[cfg(target_os = "android")]
     {
