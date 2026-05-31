@@ -172,8 +172,8 @@ export function getMobileSettings() {
   return invoke<MobileSettings>('get_mobile_settings')
 }
 
-export function pickCategoryDirectory() {
-  return invoke<string | null>('pick_category_directory')
+export function pickCategoryDirectory(persist = true) {
+  return invoke<string | null>('pick_category_directory', { persist })
 }
 
 export function pickDownloadDirectory() {

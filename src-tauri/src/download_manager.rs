@@ -996,7 +996,8 @@ impl DownloadTask {
             return;
         }
 
-        let save_path = download_dir.join(&zip_info.file_name);
+        let zip_file_name = zip_download::safe_zip_save_file_name(&zip_info.file_name, comic_id);
+        let save_path = download_dir.join(&zip_file_name);
         let part_path = zip_part_path(&save_path);
         zip_download::remove_file_if_exists(&part_path);
 

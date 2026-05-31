@@ -99,6 +99,12 @@ import {
 import { readerFullscreenActive } from './composables/useReaderFullscreen'
 import { initLocalReadOnAppLaunch, localReadSession } from './localReadStore'
 import { pickLocalReaderTitle } from './readerDisplayName'
+import { extractComicSearchName } from './comicSearchName'
+import {
+  findLatestSnapshotHeaderForScope,
+  hasComicCategorySnapshot,
+  resolveCategoryScopeFromComicCategory,
+} from './comicDetailSearch'
 
 type TabId = 'home' | 'download' | 'settings'
 type SubNav = 'search' | 'detail' | 'read' | 'favorites' | 'snapshots'
@@ -132,6 +138,8 @@ const activeSnapshot = ref<SnapshotCategoryHeader | null>(null)
 
 const keyword = ref('')
 const searchScope = ref<MobileSearchScope | null>(null)
+/** 使用者從「範圍」選單主動選定的下一次關鍵詞搜索範圍（切分頁還原時不沿用） */
+const scopePinnedForNextSearch = ref(false)
 const scopeMenuOpen = ref(false)
 const sortMenuOpen = ref(false)
 const pageSizeMenuOpen = ref(false)
@@ -194,6 +202,8 @@ const comics = ref<ComicInSearch[]>([])
 const SERVER_LIST_PAGE_SIZE = 20
 const PAGE_FETCH_DELAY_MS = 300
 let browsePageCache = new Map<number, SearchResult>()
+/** 綁定 tab + 搜尋條件；切換分頁時必須失效，避免官網頁快取串台 */
+let browsePageCacheKey = ''
 let browseFetchGeneration = 0
 /** 底部頁碼列顯示的「第幾頁」（依每頁顯示筆數切分總結果） */
 const viewPage = ref(1)
@@ -251,7 +261,15 @@ function finishBrowseViewLoadStatus() {
 }
 
 /** 有列表結果且需要分頁控制時（與底部頁碼列相同條件） */
-const showSearchPager = computed(() => subNav.value === 'search' && totalCount.value > 0)
+const hasActiveSearchTab = computed(
+  () =>
+    activeSearchTabId.value !== null &&
+    searchTabs.value.some((t) => t.id === activeSearchTabId.value),
+)
+const visibleSearchComics = computed(() => (hasActiveSearchTab.value ? comics.value : []))
+const showSearchPager = computed(
+  () => subNav.value === 'search' && hasActiveSearchTab.value && totalCount.value > 0,
+)
 const canUseKoreanDownloadMode = computed(
   () =>
     subNav.value === 'search' &&
@@ -412,16 +430,19 @@ const favoriteComicsSorted = computed(() =>
   sortSearchComics(favoriteComics.value, favSortOrder.value),
 )
 
+const favPageSizeEffective = computed(() => Math.max(1, favPageSize.value))
+
 const favTotalPages = computed(() =>
-  Math.max(1, Math.ceil(favoriteComics.value.length / favPageSize.value)),
+  Math.max(1, Math.ceil(favoriteComics.value.length / favPageSizeEffective.value)),
 )
 
 const favoriteComicsVisible = computed(() => {
   const sorted = favoriteComicsSorted.value
   if (sorted.length === 0) return []
   const vp = Math.max(1, Math.min(favViewPage.value, favTotalPages.value))
-  const start = (vp - 1) * favPageSize.value
-  return sorted.slice(start, start + favPageSize.value)
+  const ps = favPageSizeEffective.value
+  const start = (vp - 1) * ps
+  return sorted.slice(start, start + ps)
 })
 
 const favPageSummary = computed(() => {
@@ -474,6 +495,8 @@ const detailCreatedLabel = computed(() => {
 const siteNavRowRef = ref<HTMLElement | null>(null)
 const categoryMenuRef = ref<HTMLElement | null>(null)
 const categoryMenuLeft = ref(0)
+const scopeBtnRef = ref<HTMLElement | null>(null)
+const scopeMenuPos = ref({ top: 0, left: 0, minWidth: 140 })
 
 const pageJumpOpen = ref(false)
 const favPageJumpOpen = ref(false)
@@ -486,6 +509,8 @@ const batchDownloadMenuOpen = ref(false)
 const koreanModeDialogOpen = ref(false)
 const koreanModeDialogComics = ref<ComicInSearch[]>([])
 const koreanModeDialogTagLabel = ref('')
+const searchScrollRef = ref<HTMLElement | null>(null)
+const favScrollRef = ref<HTMLElement | null>(null)
 const pagerBarRef = ref<HTMLElement | null>(null)
 const pagerSummaryBtnRef = ref<HTMLElement | null>(null)
 /** 隱藏探針：與 .pt-num 同樣式，用於量測單個頁碼按鈕寬度 */
@@ -621,8 +646,55 @@ watch(favPageJumpOpen, (open) => {
   if (open) {
     pageGoForFavorites.value = true
     pageGoInput.value = String(favViewPage.value)
+  } else {
+    pageGoForFavorites.value = false
   }
 })
+
+function scrollSearchResultsToTop() {
+  void nextTick(() => {
+    const el = searchScrollRef.value
+    if (el) el.scrollTop = 0
+  })
+}
+
+function scrollFavoritesToTop() {
+  void nextTick(() => {
+    const el = favScrollRef.value
+    if (el) el.scrollTop = 0
+  })
+}
+
+function readSearchScrollTop(): number {
+  return searchScrollRef.value?.scrollTop ?? 0
+}
+
+function restoreSearchScrollTop(scrollTop: number | undefined) {
+  void nextTick(() => {
+    const el = searchScrollRef.value
+    if (el) el.scrollTop = scrollTop ?? 0
+  })
+}
+
+function clearSearchKeyword() {
+  keyword.value = ''
+}
+
+watch(scopeMenuOpen, (open) => {
+  if (!open) return
+  void nextTick(updateScopeMenuPosition)
+})
+
+function updateScopeMenuPosition() {
+  const btn = scopeBtnRef.value
+  if (!btn) return
+  const rect = btn.getBoundingClientRect()
+  scopeMenuPos.value = {
+    top: rect.bottom + 2,
+    left: rect.left,
+    minWidth: Math.max(rect.width, 140),
+  }
+}
 
 watch(expandedNavParent, () => {
   void nextTick()
@@ -659,6 +731,7 @@ function closeMenus() {
   pageJumpOpen.value = false
   favPageJumpOpen.value = false
   batchDownloadMenuOpen.value = false
+  detailPanelRef.value?.closeSearchMenu?.()
 }
 
 function toggleBatchDownloadMenu(ev: Event) {
@@ -704,25 +777,65 @@ function toggleFavoriteComic(comic: ComicInSearch) {
   saveFavoriteComics(favoriteComics.value)
 }
 
+function tabStoredKeyword(kind: BrowseKind, kw: string): string {
+  return kind === 'keyword' || kind === 'snapshot' ? kw : ''
+}
+
 function captureCurrentTab(): MobileSearchTab {
   const id = activeSearchTabId.value ?? crypto.randomUUID()
+  const existingIdx = searchTabs.value.findIndex((t) => t.id === id)
+  const existing = existingIdx >= 0 ? searchTabs.value[existingIdx]! : null
+  // 搜尋欄在非 keyword 分頁僅為草稿，持久化時以分頁已提交狀態為準，避免污染快照／分類分頁
+  const draftKeywordBrowseKinds: BrowseKind[] = [
+    'snapshot',
+    'home',
+    'albums',
+    'category',
+    'ranking',
+    'none',
+  ]
+  const keywordIsDraft =
+    existing !== null &&
+    draftKeywordBrowseKinds.includes(existing.browseKind) &&
+    existing.browseKind === browseKind.value
+  const identity = keywordIsDraft
+    ? {
+        keyword: tabStoredKeyword(existing.browseKind, existing.keyword),
+        searchScope: existing.searchScope ? { ...existing.searchScope } : null,
+        browseKind: existing.browseKind,
+        activeTopCategory: existing.activeTopCategory,
+        categoryBrowseCateId: existing.categoryBrowseCateId,
+        rankingCateId: existing.rankingCateId,
+        snapshotPath: existing.snapshotPath,
+        snapshotLabel: existing.snapshotLabel,
+      }
+    : {
+        keyword: tabStoredKeyword(browseKind.value, keyword.value),
+        searchScope: searchScope.value ? { ...searchScope.value } : null,
+        browseKind: browseKind.value,
+        activeTopCategory: activeTopCategory.value,
+        categoryBrowseCateId: categoryBrowseCateId.value,
+        rankingCateId: rankingCateId.value,
+        snapshotPath: activeSnapshot.value?.filePath ?? null,
+        snapshotLabel: activeSnapshot.value?.label ?? null,
+      }
   return {
     id,
     title: formatMobileSearchTabTitle({
-      browseKind: browseKind.value,
-      keyword: keyword.value,
-      searchScope: searchScope.value,
-      activeTopCategory: activeTopCategory.value,
-      snapshotLabel: activeSnapshot.value?.label ?? null,
+      browseKind: identity.browseKind,
+      keyword: identity.keyword,
+      searchScope: identity.searchScope,
+      activeTopCategory: identity.activeTopCategory,
+      snapshotLabel: identity.snapshotLabel,
     }),
-    keyword: keyword.value,
-    searchScope: searchScope.value ? { ...searchScope.value } : null,
-    browseKind: browseKind.value,
-    activeTopCategory: activeTopCategory.value,
-    categoryBrowseCateId: categoryBrowseCateId.value,
-    rankingCateId: rankingCateId.value,
-    snapshotPath: activeSnapshot.value?.filePath ?? null,
-    snapshotLabel: activeSnapshot.value?.label ?? null,
+    keyword: identity.keyword,
+    searchScope: identity.searchScope,
+    browseKind: identity.browseKind,
+    activeTopCategory: identity.activeTopCategory,
+    categoryBrowseCateId: identity.categoryBrowseCateId,
+    rankingCateId: identity.rankingCateId,
+    snapshotPath: identity.snapshotPath,
+    snapshotLabel: identity.snapshotLabel,
     allComics: [...allComics.value],
     currentPage: viewPage.value,
     totalPages: totalPages.value,
@@ -731,20 +844,29 @@ function captureCurrentTab(): MobileSearchTab {
     pageSize: pageSize.value,
     gridLayout: gridLayout.value,
     catalogAnalysisEntries: [...catalogAnalysisByComicId.value.entries()],
+    scrollTop: readSearchScrollTop(),
+    serverChunkBase: serverChunkBase.value,
+    serverPage: serverPage.value,
+    totalCountRefined: totalCountRefined.value,
   }
 }
 
 function persistActiveTab() {
   if (!activeSearchTabId.value) return
-  const idx = searchTabs.value.findIndex((t) => t.id === activeSearchTabId.value)
-  if (idx < 0) return
-  searchTabs.value[idx] = captureCurrentTab()
+  const tab = captureCurrentTab()
+  const idx = searchTabs.value.findIndex((t) => t.id === tab.id)
+  if (idx >= 0) {
+    searchTabs.value[idx] = tab
+  } else {
+    searchTabs.value.push(tab)
+  }
   if (!saveSearchTabs(searchTabs.value, activeSearchTabId.value)) {
     setStatus('分頁狀態過大，已略過儲存列表（快照分頁重開後會重新載入）')
   }
 }
 
-function commitSearchTabAfterLoad() {
+function commitSearchTabAfterLoad(expectedTabId: string | null) {
+  if (!expectedTabId || activeSearchTabId.value !== expectedTabId) return
   catalogAnalysisByComicId.value = new Map()
   const tab = captureCurrentTab()
   const idx = searchTabs.value.findIndex((t) => t.id === tab.id)
@@ -762,6 +884,10 @@ function commitSearchTabAfterLoad() {
 function startNewSearchTab() {
   persistActiveTab()
   activeSearchTabId.value = crypto.randomUUID()
+  scopePinnedForNextSearch.value = false
+  searchScope.value = null
+  activeSnapshot.value = null
+  keyword.value = ''
   clearBrowsePageCache()
   // 切換到新搜尋分頁時清空舊快取，避免新搜尋沿用前一個分頁結果。
   allComics.value = []
@@ -775,6 +901,7 @@ function startNewSearchTab() {
   browseKind.value = 'none'
   pageSize.value = loadSavedPageSize()
   catalogAnalysisByComicId.value = new Map()
+  syncBrowsePageCacheToContext()
 }
 
 async function reloadSnapshotTabFromStorage(tab: MobileSearchTab) {
@@ -784,6 +911,7 @@ async function reloadSnapshotTabFromStorage(tab: MobileSearchTab) {
   loadingHint.value = '正在載入快照…'
   try {
     const result = await searchSnapshotFile(path, tab.keyword.trim())
+    if (activeSearchTabId.value !== tab.id) return
     allComics.value = result.comics
     totalCount.value = result.total
     viewPage.value = Math.min(tab.currentPage, Math.max(1, Math.ceil(result.total / pageSize.value)))
@@ -803,10 +931,81 @@ async function reloadSnapshotTabFromStorage(tab: MobileSearchTab) {
     loading.value = false
     loadingHint.value = ''
   }
+  restoreSearchScrollTop(tab.scrollTop)
+}
+
+function restoreTabServerPaging(tab: MobileSearchTab) {
+  totalCountRefined.value = tab.totalCountRefined ?? false
+  if (tab.browseKind === 'snapshot') {
+    serverPage.value = viewPage.value
+    serverChunkBase.value = 1
+    return
+  }
+  if (typeof tab.serverChunkBase === 'number' && typeof tab.serverPage === 'number') {
+    serverChunkBase.value = tab.serverChunkBase
+    serverPage.value = tab.serverPage
+    return
+  }
+  if (tab.browseKind !== 'none' && totalCount.value > 0) {
+    const [spStart] = serverPageRangeForView(viewPage.value)
+    serverChunkBase.value = spStart
+    serverPage.value = spStart
+    return
+  }
+  serverChunkBase.value = 1
+  serverPage.value = 1
+}
+
+function browseContextKey(): string {
+  const tabId = activeSearchTabId.value ?? ''
+  return [
+    tabId,
+    browseKind.value,
+    tabStoredKeyword(browseKind.value, keyword.value),
+    categoryBrowseCateId.value ?? '',
+    rankingCateId.value ?? '',
+    activeTopCategory.value,
+    searchScope.value?.filePath ?? '',
+    searchScope.value?.cateId ?? '',
+    String(pageSize.value),
+  ].join('|')
+}
+
+/** 分頁或搜尋條件變更時清空官網頁快取，避免關鍵詞／分類分頁共用 Map */
+function syncBrowsePageCacheToContext() {
+  const key = browseContextKey()
+  if (key === browsePageCacheKey) return
+  browsePageCache.clear()
+  browsePageCacheKey = key
+  browseFetchGeneration++
+}
+
+function resetSearchSession() {
+  activeSearchTabId.value = null
+  allComics.value = []
+  comics.value = []
+  totalCount.value = 0
+  totalCountRefined.value = false
+  totalPages.value = 1
+  viewPage.value = 1
+  serverPage.value = 1
+  serverChunkBase.value = 1
+  browseKind.value = 'none'
+  keyword.value = ''
+  searchScope.value = null
+  activeSnapshot.value = null
+  activeTopCategory.value = ''
+  categoryBrowseCateId.value = null
+  rankingCateId.value = null
+  scopePinnedForNextSearch.value = false
+  catalogAnalysisByComicId.value = new Map()
+  loading.value = false
+  loadingHint.value = ''
+  clearStatus()
 }
 
 function restoreTab(tab: MobileSearchTab) {
-  keyword.value = tab.keyword
+  scopePinnedForNextSearch.value = false
   if (tab.searchScope?.filePath) {
     searchScope.value = { ...tab.searchScope }
     syncSearchScopeFromHeaders()
@@ -814,6 +1013,7 @@ function restoreTab(tab: MobileSearchTab) {
     searchScope.value = null
   }
   browseKind.value = tab.browseKind
+  keyword.value = tabStoredKeyword(tab.browseKind, tab.keyword)
   activeTopCategory.value = tab.activeTopCategory
   categoryBrowseCateId.value = tab.categoryBrowseCateId
   rankingCateId.value = tab.rankingCateId
@@ -838,11 +1038,15 @@ function restoreTab(tab: MobileSearchTab) {
   gridLayout.value = tab.gridLayout
   catalogAnalysisByComicId.value = new Map(tab.catalogAnalysisEntries ?? [])
   subNav.value = 'search'
+  restoreTabServerPaging(tab)
+  syncBrowsePageCacheToContext()
+
+  const finishRestore = () => restoreSearchScrollTop(tab.scrollTop)
 
   if (tab.browseKind === 'snapshot' && tab.snapshotPath && tab.allComics.length === 0) {
     allComics.value = []
     comics.value = []
-    void reloadSnapshotTabFromStorage(tab)
+    void reloadSnapshotTabFromStorage(tab).then(finishRestore)
     return
   }
 
@@ -857,19 +1061,23 @@ function restoreTab(tab: MobileSearchTab) {
   if (needsReload) {
     totalCount.value = 0
     comics.value = []
-    void loadBrowseFromStart()
+    void loadBrowseFromStart().then(finishRestore)
     return
   }
   if (browseKind.value === 'snapshot') {
-    serverPage.value = viewPage.value
     applyClientView()
+    finishRestore()
   } else if (browseKind.value !== 'none' && totalCount.value > 0) {
-    clearBrowsePageCache()
-    void goViewPage(viewPage.value, true)
+    if (tab.allComics.length > 0) {
+      applyClientView()
+      finishRestore()
+    } else {
+      clearBrowsePageCache()
+      void goViewPage(viewPage.value, true).then(finishRestore)
+    }
   } else {
-    serverPage.value = 1
-    serverChunkBase.value = 1
     applyClientView()
+    finishRestore()
   }
 }
 
@@ -886,19 +1094,16 @@ function selectSearchTab(id: string) {
 function closeSearchTab(id: string) {
   const idx = searchTabs.value.findIndex((t) => t.id === id)
   if (idx < 0) return
+  const closingActive = activeSearchTabId.value === id
   searchTabs.value.splice(idx, 1)
-  if (activeSearchTabId.value === id) {
+  if (closingActive) {
+    clearBrowsePageCache()
     const next = searchTabs.value[idx] ?? searchTabs.value[idx - 1]
     if (next) {
-      restoreTab(next)
       activeSearchTabId.value = next.id
+      restoreTab(next)
     } else {
-      activeSearchTabId.value = null
-      allComics.value = []
-      comics.value = []
-      totalCount.value = 0
-      totalCountRefined.value = false
-      browseKind.value = 'none'
+      resetSearchSession()
     }
     saveSearchTabs(searchTabs.value, activeSearchTabId.value)
   } else {
@@ -1252,6 +1457,9 @@ function resolveTopCategoryItem(): SiteCategoryItem | undefined {
 
 function resolveBrowseKindFromContext(): BrowseKind {
   if (activeSnapshot.value?.filePath) return 'snapshot'
+  // 已在官網分類／榜單／快照瀏覽時，搜尋欄文字僅供下一次搜尋，不可覆寫 browseKind
+  const lockedKinds: BrowseKind[] = ['home', 'albums', 'category', 'ranking', 'snapshot']
+  if (lockedKinds.includes(browseKind.value)) return browseKind.value
   if (keyword.value.trim()) return 'keyword'
   if (rankingCateId.value !== null) return 'ranking'
   if (categoryBrowseCateId.value !== null) return 'category'
@@ -1296,6 +1504,11 @@ function syncSearchScopeFromHeaders() {
 }
 
 function applyClientView() {
+  if (!activeSearchTabId.value || browseKind.value === 'none') {
+    comics.value = []
+    totalPages.value = 1
+    return
+  }
   const sorted = sortSearchComics(allComics.value, sortOrder.value)
   for (const c of sorted) rememberComicMeta(c)
 
@@ -1305,7 +1518,7 @@ function applyClientView() {
     totalCount.value = 0
   }
 
-  if (browseKind.value === 'none' || totalCount.value <= 0) {
+  if (totalCount.value <= 0) {
     comics.value = sorted
     totalPages.value = 1
     return
@@ -1371,6 +1584,7 @@ function shrinkTotalCountFromServerPage(serverPageNum: number, result: SearchRes
 }
 
 function ingestSearchMetadata(result: SearchResult, requestedServerPage?: number) {
+  syncBrowsePageCacheToContext()
   const cachePage = requestedServerPage ?? result.currentPage
   browsePageCache.set(cachePage, result)
   const total = effectiveTotalCount(result)
@@ -1380,7 +1594,15 @@ function ingestSearchMetadata(result: SearchResult, requestedServerPage?: number
   shrinkTotalCountFromServerPage(cachePage, result)
 }
 
-function applySearchResult(result: SearchResult, kind: BrowseKind, _label: string, loadedPage?: number) {
+function applySearchResult(
+  result: SearchResult,
+  kind: BrowseKind,
+  _label: string,
+  loadedPage?: number,
+  expectedTabId?: string | null,
+) {
+  const tabId = expectedTabId ?? activeSearchTabId.value
+  if (!tabId || activeSearchTabId.value !== tabId || browseKind.value === 'none') return
   allComics.value = result.comics
   const resolvedPage = loadedPage ?? result.currentPage
   serverPage.value = resolvedPage
@@ -1389,7 +1611,7 @@ function applySearchResult(result: SearchResult, kind: BrowseKind, _label: strin
   browseKind.value = kind === 'none' ? resolveBrowseKindFromContext() : kind
   applyClientView()
   clearStatus()
-  commitSearchTabAfterLoad()
+  commitSearchTabAfterLoad(expectedTabId ?? activeSearchTabId.value)
 }
 
 function serverPageRangeForView(vp: number): [number, number] {
@@ -1420,6 +1642,7 @@ function clearBrowsePageCache() {
 
 /** 合併官網多頁；僅在「跨頁邊界」去掉重複首筆，頁內與快照/官網 HTML 一致 */
 function mergeServerPageComics(spStart: number, spEnd: number): ComicInSearch[] {
+  syncBrowsePageCacheToContext()
   const merged: ComicInSearch[] = []
   for (let p = spStart; p <= spEnd; p++) {
     const cached = browsePageCache.get(p)
@@ -1511,12 +1734,18 @@ async function refreshCategoryHeaders() {
 
 async function loadBrowseViewChunk(vp: number) {
   if (loading.value) return
-  if (browseKind.value === 'none') {
-    setStatus('請先選擇分類或搜尋')
+  if (browseKind.value === 'none' || !activeSearchTabId.value) {
     return
   }
 
+  syncBrowsePageCacheToContext()
+  const tabIdAtStart = activeSearchTabId.value
   const gen = browseFetchGeneration
+  const browseLoadAborted = () =>
+    gen !== browseFetchGeneration ||
+    !tabIdAtStart ||
+    activeSearchTabId.value !== tabIdAtStart ||
+    browseKind.value === 'none'
   const startIdx = (vp - 1) * pageSize.value
   const endIdx =
     totalCount.value > 0
@@ -1535,17 +1764,17 @@ async function loadBrowseViewChunk(vp: number) {
   try {
     let hadNetworkFetch = false
     while (true) {
-      if (gen !== browseFetchGeneration) return
+      if (browseLoadAborted()) return
 
       const safeEnd = totalCount.value > 0 ? Math.min(spEnd, maxServerListPage()) : spEnd
       for (let p = spStart; p <= safeEnd; p++) {
         if (totalCount.value > 0 && p > maxServerListPage()) break
         if (browsePageCache.has(p)) continue
         if (hadNetworkFetch) await sleep(PAGE_FETCH_DELAY_MS)
-        if (gen !== browseFetchGeneration) return
+        if (browseLoadAborted()) return
         loadingHint.value = `載入第 ${p} 頁…`
         const result = await fetchBrowseResult(p)
-        if (gen !== browseFetchGeneration) return
+        if (browseLoadAborted()) return
         ingestSearchMetadata(result, p)
         hadNetworkFetch = true
       }
@@ -1560,22 +1789,24 @@ async function loadBrowseViewChunk(vp: number) {
       const merged = mergeServerPageComics(spStart, safeEnd)
       const slice = sliceMergedView(merged, offset, wantedCount)
       if (slice.length >= wantedCount) {
+        if (browseLoadAborted()) return
         allComics.value = merged
         serverChunkBase.value = spStart
         serverPage.value = safeEnd
         applyClientView()
         finishBrowseViewLoadStatus()
-        commitSearchTabAfterLoad()
+        commitSearchTabAfterLoad(tabIdAtStart)
         return
       }
 
       if (totalCount.value > 0 && spEnd >= maxServerListPage()) {
+        if (browseLoadAborted()) return
         allComics.value = merged
         serverChunkBase.value = spStart
         serverPage.value = safeEnd
         applyClientView()
         finishBrowseViewLoadStatus()
-        commitSearchTabAfterLoad()
+        commitSearchTabAfterLoad(tabIdAtStart)
         return
       }
 
@@ -1583,6 +1814,7 @@ async function loadBrowseViewChunk(vp: number) {
       if (totalCount.value <= 0 && spEnd > spStart + 20) break
     }
   } catch (e) {
+    if (browseLoadAborted()) return
     setStatus(e)
     allComics.value = []
     comics.value = []
@@ -1599,12 +1831,14 @@ async function loadServerPage(page: number) {
     return
   }
 
+  syncBrowsePageCacheToContext()
+  const tabIdAtStart = activeSearchTabId.value
   loading.value = true
   loadingHint.value = '正在載入…'
   try {
     loadingHint.value = `載入第 ${page} 頁…`
     const result = await fetchBrowseResult(page)
-    applySearchResult(result, browseKind.value, activeTopCategory.value || '列表', page)
+    applySearchResult(result, browseKind.value, activeTopCategory.value || '列表', page, tabIdAtStart)
   } catch (e) {
     setStatus(e)
     allComics.value = []
@@ -1616,6 +1850,7 @@ async function loadServerPage(page: number) {
 }
 
 async function ensureServerDataForView(vp: number) {
+  if (!activeSearchTabId.value || browseKind.value === 'none') return
   if (cachedChunkCoversView(vp)) {
     applyClientView()
     return
@@ -1635,6 +1870,8 @@ async function loadBrowseFromStart() {
 
 async function goViewPage(vp: number, force = false) {
   if (loading.value) return
+
+  syncBrowsePageCacheToContext()
 
   if (browseKind.value === 'snapshot') {
     if (totalCount.value <= 0) return
@@ -1673,6 +1910,15 @@ async function goViewPage(vp: number, force = false) {
   persistActiveTab()
 }
 
+/** 僅在搜索結果底部分頁列切頁且頁碼有變更時使用（會回彈列表至頂部） */
+async function goSearchResultsPage(vp: number) {
+  const before = viewPage.value
+  await goViewPage(vp)
+  if (viewPage.value !== before) {
+    scrollSearchResultsToTop()
+  }
+}
+
 function isTopRowActive(item: SiteCategoryItem): boolean {
   if (item.children?.length) {
     return (
@@ -1704,6 +1950,7 @@ function onTopNavClick(item: SiteCategoryItem) {
     rankingCateId.value = null
     activeSnapshot.value = null
     searchScope.value = null
+    keyword.value = ''
     subNav.value = 'search'
     if (!activeSearchTabId.value) {
       activeSearchTabId.value = crypto.randomUUID()
@@ -1716,6 +1963,7 @@ function onTopNavClick(item: SiteCategoryItem) {
 
 async function runLeafBrowse(item: SiteCategoryItem) {
   closeMenus()
+  keyword.value = ''
   startNewSearchTab()
   categoryBrowseCateId.value = null
   activeSnapshot.value = null
@@ -1756,6 +2004,7 @@ async function onParentCategoryClick(parent: SiteCategoryItem) {
 async function onChildCategoryClick(parent: SiteCategoryItem, child: SiteCategoryItem) {
   closeMenus()
   expandedNavParent.value = null
+  keyword.value = ''
   startNewSearchTab()
   activeSnapshot.value = null
   subNav.value = 'search'
@@ -1794,6 +2043,7 @@ async function submitKeywordSearch() {
   }
   closeMenus()
   expandedNavParent.value = null
+  const scopedSearch = scopePinnedForNextSearch.value ? searchScope.value : null
   startNewSearchTab()
   subNav.value = 'search'
   activeTopCategory.value = ''
@@ -1802,30 +2052,40 @@ async function submitKeywordSearch() {
   viewPage.value = 1
   serverPage.value = 1
   serverChunkBase.value = 1
+  keyword.value = kw
 
-  const scopePath = searchScope.value?.filePath
-  if (scopePath) {
-    const header = categoryHeaders.value.find((h) => h.filePath === scopePath)
+  if (scopedSearch?.filePath) {
+    const header = categoryHeaders.value.find((h) => h.filePath === scopedSearch.filePath)
     if (!header) {
-      setStatus('分類快照已不存在，請至設定重新讀取分類目錄')
+      setStatus('分類快照已不存在，改為全站搜索')
       searchScope.value = null
+      activeSnapshot.value = null
+      browseKind.value = 'keyword'
+      await loadBrowseFromStart()
       return
     }
-    await runSnapshotSearch(header, { newTab: false })
+    await runSnapshotSearch(header, { newTab: false, filterKeyword: kw })
     return
   }
 
   activeSnapshot.value = null
+  searchScope.value = null
   browseKind.value = 'keyword'
   await loadBrowseFromStart()
 }
 
-async function runSnapshotSearch(header: SnapshotCategoryHeader, options?: { newTab?: boolean }) {
+async function runSnapshotSearch(
+  header: SnapshotCategoryHeader,
+  options?: { newTab?: boolean; filterKeyword?: string },
+) {
   closeMenus()
   expandedNavParent.value = null
   if (options?.newTab !== false) {
     startNewSearchTab()
   }
+  const filterKeyword = options?.filterKeyword ?? ''
+  keyword.value = filterKeyword
+  const tabIdAtStart = activeSearchTabId.value
   subNav.value = 'search'
   activeSnapshot.value = header
   searchScope.value = {
@@ -1840,7 +2100,8 @@ async function runSnapshotSearch(header: SnapshotCategoryHeader, options?: { new
   loading.value = true
   loadingHint.value = '正在載入快照（大檔可能需要數十秒）…'
   try {
-    const result = await searchSnapshotFile(header.filePath, keyword.value.trim())
+    const result = await searchSnapshotFile(header.filePath, filterKeyword)
+    if (activeSearchTabId.value !== tabIdAtStart) return
     allComics.value = result.comics
     totalCount.value = result.total
     viewPage.value = 1
@@ -1848,7 +2109,7 @@ async function runSnapshotSearch(header: SnapshotCategoryHeader, options?: { new
     serverChunkBase.value = 1
     applyClientView()
     clearStatus()
-    commitSearchTabAfterLoad()
+    commitSearchTabAfterLoad(tabIdAtStart)
   } catch (e) {
     setStatus(e)
     allComics.value = []
@@ -1861,6 +2122,7 @@ async function runSnapshotSearch(header: SnapshotCategoryHeader, options?: { new
 
 function onScopeSelect(header: SnapshotCategoryHeader | null) {
   scopeMenuOpen.value = false
+  scopePinnedForNextSearch.value = header !== null
   if (header === null) {
     searchScope.value = null
   } else {
@@ -1905,6 +2167,7 @@ function onPageSizeSelect(size: number) {
     serverChunkBase.value = 1
     applyClientView()
   } else if (browseKind.value !== 'none') {
+    syncBrowsePageCacheToContext()
     void ensureServerDataForView(1)
   }
   clearStatus()
@@ -1932,29 +2195,31 @@ function onFavLayoutSelect(layout: GridLayout) {
 }
 
 function goPrevPage() {
-  if (viewPage.value > 1) void goViewPage(viewPage.value - 1)
+  if (viewPage.value > 1) void goSearchResultsPage(viewPage.value - 1)
 }
 
 function goNextPage() {
-  if (viewPage.value < totalPages.value) void goViewPage(viewPage.value + 1)
+  if (viewPage.value < totalPages.value) void goSearchResultsPage(viewPage.value + 1)
 }
 
 function goPage(n: number) {
   if (n < 1 || n > totalPages.value) return
-  void goViewPage(n)
+  void goSearchResultsPage(n)
 }
 
 function goFavPage(n: number) {
   if (n < 1 || n > favTotalPages.value) return
+  if (n === favViewPage.value) return
   favViewPage.value = n
+  scrollFavoritesToTop()
 }
 
 function goFavPrevPage() {
-  if (favViewPage.value > 1) favViewPage.value -= 1
+  if (favViewPage.value > 1) goFavPage(favViewPage.value - 1)
 }
 
 function goFavNextPage() {
-  if (favViewPage.value < favTotalPages.value) favViewPage.value += 1
+  if (favViewPage.value < favTotalPages.value) goFavPage(favViewPage.value + 1)
 }
 
 function pickFavJumpPage(n: number) {
@@ -1984,7 +2249,7 @@ function confirmPageGoFromJump() {
     return
   }
   pageJumpOpen.value = false
-  void goViewPage(n)
+  void goSearchResultsPage(n)
 }
 
 async function downloadAllPage() {
@@ -2117,7 +2382,7 @@ function confirmDownloadAllFavorites() {
 
 async function exportFavoriteArchive() {
   try {
-    const dir = await pickCategoryDirectory()
+    const dir = await pickCategoryDirectory(false)
     if (!dir) return
 
     if (favoritesSection.value === 'comics') {
@@ -2329,6 +2594,14 @@ const selectedComicId = ref<number | null>(null)
 const pickedComic = ref<Comic | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+const detailPanelRef = ref<{ closeSearchMenu?: () => void } | null>(null)
+
+const detailSnapshotSearchAvailable = computed(() => {
+  const comic = pickedComic.value
+  if (!comic?.category.trim()) return false
+  if (!hasCategoryDir.value || categoryHeaders.value.length === 0) return false
+  return hasComicCategorySnapshot(comic.category, categoryHeaders.value)
+})
 
 async function loadComicDetail(id: number) {
   detailLoading.value = true
@@ -2375,6 +2648,7 @@ async function onDetailTagSearch(tagName: string) {
   expandedNavParent.value = null
   keyword.value = tagName
   startNewSearchTab()
+  const tabIdAtStart = activeSearchTabId.value
   subNav.value = 'search'
   viewPage.value = 1
   serverPage.value = 1
@@ -2384,7 +2658,7 @@ async function onDetailTagSearch(tagName: string) {
   if (scopePath) {
     const header = categoryHeaders.value.find((h) => h.filePath === scopePath)
     if (header) {
-      await runSnapshotSearch(header, { newTab: false })
+      await runSnapshotSearch(header, { newTab: false, filterKeyword: tagName })
       return
     }
     searchScope.value = null
@@ -2395,12 +2669,50 @@ async function onDetailTagSearch(tagName: string) {
   loading.value = true
   try {
     const result = await searchByTag(tagName, 1, null)
-    applySearchResult(result, 'keyword', tagName)
+    applySearchResult(result, 'keyword', tagName, undefined, tabIdAtStart)
   } catch (e) {
     setStatus(e)
   } finally {
     loading.value = false
   }
+}
+
+async function onDetailSearch(mode: 'global' | 'snapshot') {
+  const comic = pickedComic.value
+  if (!comic) return
+  const searchName = extractComicSearchName(comic.title)
+  if (!searchName) {
+    setStatus('無法從標題提取漫畫名')
+    return
+  }
+  closeMenus()
+  expandedNavParent.value = null
+  keyword.value = searchName
+
+  if (mode === 'global') {
+    searchScope.value = null
+    activeSnapshot.value = null
+    activeTopCategory.value = ''
+    categoryBrowseCateId.value = null
+    rankingCateId.value = null
+    startNewSearchTab()
+    subNav.value = 'search'
+    browseKind.value = 'keyword'
+    await loadBrowseFromStart()
+    return
+  }
+
+  const scope = resolveCategoryScopeFromComicCategory(comic.category)
+  if (!scope) {
+    setStatus(`無法識別分類「${comic.category}」`)
+    return
+  }
+  const header = findLatestSnapshotHeaderForScope(categoryHeaders.value, scope)
+  if (!header) {
+    setStatus(`沒有「${scope.label}」的分類快照`)
+    return
+  }
+  await runSnapshotSearch(header, { newTab: true, filterKeyword: searchName })
 }
 
 watch(
@@ -2464,12 +2776,16 @@ onUnmounted(() => {
 <template>
   <div class="app" @click="closeMenus">
     <div
-      v-if="activeTab === 'home'"
+      v-show="activeTab === 'home'"
       class="home"
       :class="{ 'home--reader-fs': readerFullscreenActive }"
       @click.stop
     >
-      <div v-show="!readerFullscreenActive" class="home-header">
+      <div
+        v-show="!readerFullscreenActive"
+        class="home-header"
+        :class="{ 'home-header--scope-open': scopeMenuOpen }"
+      >
         <div ref="siteNavRowRef" class="site-nav-row">
           <header class="site-nav">
             <button
@@ -2582,6 +2898,7 @@ onUnmounted(() => {
         <section v-if="subNav === 'search'" class="search-bar">
           <div class="scope-wrap">
             <button
+              ref="scopeBtnRef"
               type="button"
               class="scope-btn"
               :disabled="!canUseCategoryScope"
@@ -2590,25 +2907,24 @@ onUnmounted(() => {
             >
               範圍：{{ scopeLabel }}
             </button>
-            <div v-if="scopeMenuOpen && canUseCategoryScope" class="dropdown-menu" @click.stop>
-              <button type="button" @click="onScopeSelect(null)">全站</button>
-              <button
-                v-for="h in categoryHeaders"
-                :key="h.filePath"
-                type="button"
-                :class="{ on: searchScope?.filePath === h.filePath }"
-                @click="onScopeSelect(h)"
-              >
-                {{ h.label }}
-              </button>
-            </div>
           </div>
-          <input
-            v-model="keyword"
-            class="search-input"
-            placeholder="關鍵詞／漫畫鏈結"
-            @keydown.enter="submitKeywordSearch"
-          />
+          <div class="search-input-wrap">
+            <input
+              v-model="keyword"
+              class="search-input"
+              placeholder="關鍵詞／漫畫鏈結"
+              @keydown.enter="submitKeywordSearch"
+            />
+            <button
+              v-if="keyword.length > 0"
+              type="button"
+              class="search-clear"
+              aria-label="清除關鍵字"
+              @click.stop="clearSearchKeyword"
+            >
+              ×
+            </button>
+          </div>
           <button type="button" class="search-go" :disabled="loading" @click.stop="submitKeywordSearch">
             搜索
           </button>
@@ -2629,7 +2945,31 @@ onUnmounted(() => {
         <p v-else-if="showStatusLine && statusMessage" class="status">{{ statusMessage }}</p>
       </div>
 
-      <div v-if="subNav === 'search'" class="comic-scroll">
+      <Teleport to="body">
+        <div
+          v-if="scopeMenuOpen && canUseCategoryScope && subNav === 'search'"
+          class="dropdown-menu scope-dropdown scope-dropdown--portal"
+          :style="{
+            top: `${scopeMenuPos.top}px`,
+            left: `${scopeMenuPos.left}px`,
+            minWidth: `${scopeMenuPos.minWidth}px`,
+          }"
+          @click.stop
+        >
+          <button type="button" @click="onScopeSelect(null)">全站</button>
+          <button
+            v-for="h in categoryHeaders"
+            :key="h.filePath"
+            type="button"
+            :class="{ on: searchScope?.filePath === h.filePath }"
+            @click="onScopeSelect(h)"
+          >
+            {{ h.label }}
+          </button>
+        </div>
+      </Teleport>
+
+      <div v-show="subNav === 'search'" ref="searchScrollRef" class="comic-scroll">
         <div v-if="loading" class="loading-mask">{{ loadingHint || '載入中…' }}</div>
 
         <div
@@ -2641,7 +2981,7 @@ onUnmounted(() => {
           }"
         >
           <MobileComicCard
-            v-for="c in comics"
+            v-for="c in visibleSearchComics"
             :key="c.id"
             :comic="c"
             :layout="cardLayout"
@@ -2653,25 +2993,29 @@ onUnmounted(() => {
             @toggle-favorite="toggleFavoriteComic"
           />
         </div>
-        <p v-if="!loading && comics.length === 0" class="empty">尚無結果</p>
+        <p v-if="!loading && visibleSearchComics.length === 0" class="empty">尚無結果</p>
       </div>
 
-      <div v-else-if="subNav === 'detail'" class="comic-scroll detail-scroll">
+      <div v-show="subNav === 'detail'" class="comic-scroll detail-scroll">
         <MobileComicDetail
+          ref="detailPanelRef"
           :comic="pickedComic"
           :loading="detailLoading"
           :error="detailError"
           :created-label="detailCreatedLabel"
           :favorited="pickedComic ? isFavoriteComic(pickedComic.id) : false"
+          :snapshot-search-available="detailSnapshotSearchAvailable"
           @read="onDetailRead"
           @download="onDetailDownload"
           @tag-search="onDetailTagSearch"
+          @detail-search="onDetailSearch"
           @toggle-favorite="onDetailToggleFavorite"
         />
       </div>
 
       <div
-        v-else-if="subNav === 'favorites' && favoritesSection === 'comics'"
+        v-show="subNav === 'favorites' && favoritesSection === 'comics'"
+        ref="favScrollRef"
         class="comic-scroll"
       >
         <div
@@ -2700,13 +3044,13 @@ onUnmounted(() => {
       </div>
 
       <MobileFavoritesPanel
-        v-else-if="subNav === 'favorites' && favoritesSection === 'tabs'"
+        v-show="subNav === 'favorites' && favoritesSection === 'tabs'"
         :favorite-tabs="favoriteSearchTabs"
         @open-tab="openFavoriteTabBookmark"
         @remove-tab="(sid) => { favoriteSearchTabs = favoriteSearchTabs.filter((b) => b.sourceTabId !== sid); saveFavoriteSearchTabs(favoriteSearchTabs) }"
       />
 
-      <div v-else-if="subNav === 'snapshots'" class="comic-scroll snapshot-list-scroll">
+      <div v-show="subNav === 'snapshots'" class="comic-scroll snapshot-list-scroll">
         <div v-if="snapshotListLoading" class="loading-mask">讀取快照列表…</div>
         <div v-if="!hasCategoryDir" class="snapshot-list-empty">
           <p class="snapshot-list-empty-title">尚未設定快照資料夾</p>
@@ -3023,7 +3367,7 @@ onUnmounted(() => {
           </div>
         </footer>
         <footer v-if="showFavoritesPager" class="home-pager" @click.stop>
-          <div class="page-tab-bar page-tab-bar--dock">
+          <div ref="pagerBarRef" class="page-tab-bar page-tab-bar--dock">
             <button type="button" class="pt-nav" :disabled="favViewPage <= 1" @click="goFavPrevPage">‹</button>
             <div class="pt-nums-cluster">
               <div class="pt-nums">
@@ -3094,12 +3438,12 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <section v-else-if="activeTab === 'download'" class="tab-panel tab-panel--fill">
+    <section v-show="activeTab === 'download'" class="tab-panel tab-panel--fill">
       <h2 class="tab-h2">下載進度</h2>
       <MobileDownloadPanel />
     </section>
 
-    <section v-else class="tab-panel tab-panel--fill">
+    <section v-show="activeTab === 'settings'" class="tab-panel tab-panel--fill">
       <h2 class="tab-h2">設定</h2>
       <MobileSettingsPanel
         :category-dir="categoryDir"
@@ -3268,6 +3612,18 @@ onUnmounted(() => {
   border-bottom: 1px solid #222;
 }
 
+.home-header--scope-open {
+  z-index: 50;
+}
+
+.scope-dropdown--portal {
+  position: fixed;
+  z-index: 1000;
+  max-height: 40vh;
+  overflow: auto;
+  margin-top: 0;
+}
+
 .site-nav {
   display: flex;
   flex-wrap: nowrap;
@@ -3283,6 +3639,7 @@ onUnmounted(() => {
 .tool,
 .scope-btn,
 .search-go,
+.search-clear,
 .block-btn,
 .cat-menu-item,
 .pt-nav,
@@ -3469,6 +3826,10 @@ onUnmounted(() => {
   position: relative;
 }
 
+.dropdown-menu.scope-dropdown {
+  z-index: 120;
+}
+
 .menu-grow {
   flex: 0 0 auto;
 }
@@ -3529,17 +3890,47 @@ onUnmounted(() => {
   background: rgba(61, 110, 245, 0.12);
 }
 
+.search-input-wrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
 .search-input {
   flex: 1;
   min-width: 0;
+  width: 100%;
   min-height: 30px;
-  padding: 4px 8px;
+  padding: 4px 28px 4px 8px;
   border: 1px solid #444;
   border-left: none;
   border-right: none;
   background: #1e1e1e;
   color: #fff;
   font-size: 13px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #aaa;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.search-clear:active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .search-go {

@@ -33,6 +33,7 @@ export const API_DOMAIN_OPTIONS: readonly string[] = [
   'www.wn08.ru',
   'www.wn09.ru',
   'www.wn10.ru',
+  'www.wnacg.com',
 ] as const
 
 export type ApiDomainMode = 'Default' | 'Custom'

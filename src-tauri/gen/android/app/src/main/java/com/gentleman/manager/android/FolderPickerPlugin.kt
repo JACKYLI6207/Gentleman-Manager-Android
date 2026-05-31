@@ -126,6 +126,50 @@ class FolderPickerPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
+    fun pickOpenArchive(invoke: Invoke) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(
+                Intent.EXTRA_MIME_TYPES,
+                arrayOf("application/json", "application/octet-stream", "text/plain", "*/*")
+            )
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(invoke, intent, "pickOpenArchiveResult")
+    }
+
+    @ActivityCallback
+    fun pickOpenArchiveResult(invoke: Invoke, result: androidx.activity.result.ActivityResult) {
+        if (result.resultCode != Activity.RESULT_OK) {
+            resolvePickCancelled(invoke)
+            return
+        }
+        val uri = result.data?.data
+        if (uri == null) {
+            invoke.reject("未取得檔案 URI")
+            return
+        }
+        try {
+            activity.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+        }
+        val ret = JSObject()
+        ret.put("uri", uri.toString())
+        val name = DocumentFile.fromSingleUri(activity, uri)?.name
+        if (!name.isNullOrBlank()) {
+            ret.put("name", name)
+        }
+        invoke.resolve(ret)
+    }
+
+    @Command
     fun appendLineToDocument(invoke: Invoke) {
         val args = parseAppendLineArgs(invoke)
         val uri = Uri.parse(args.uri)
@@ -587,6 +631,7 @@ class FolderPickerPlugin(private val activity: Activity) : Plugin(activity) {
                 continue
             }
             val name = child.name ?: continue
+            if (name.startsWith("收藏漫畫存檔_") || name.startsWith("收藏分頁存檔_")) continue
             if (!name.contains("gm-snapshot", ignoreCase = true) &&
                 !name.endsWith(".json", ignoreCase = true)
             ) {

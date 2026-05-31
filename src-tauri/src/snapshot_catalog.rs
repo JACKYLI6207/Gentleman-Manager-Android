@@ -84,6 +84,10 @@ fn collect_snapshot_files(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<
                 .map(|n| n.contains("gm-snapshot") || n.ends_with(".json"))
                 .unwrap_or(false)
         {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if crate::snapshot_storage::is_favorite_archive_snapshot_file_name(name) {
+                continue;
+            }
             out.push(path);
         }
     }
@@ -102,6 +106,9 @@ fn android_headers_from_tree_uri(
 
     let mut best: HashMap<String, (i64, SnapshotCategoryHeader)> = HashMap::new();
     for f in files {
+        if crate::snapshot_storage::is_favorite_archive_snapshot_file_name(&f.label) {
+            continue;
+        }
         let key = f
             .cate_id
             .map(|id| id.to_string())
@@ -149,6 +156,10 @@ pub fn list_category_headers(
     let mut best: HashMap<String, (i64, SnapshotCategoryHeader)> = HashMap::new();
 
     for path in files {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if crate::snapshot_storage::is_favorite_archive_snapshot_file_name(name) {
+            continue;
+        }
         let summary = match crate::snapshot_storage::read_meta_summary_from_path(&path) {
             Ok(s) => s,
             Err(_) => continue,

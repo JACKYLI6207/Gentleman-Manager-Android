@@ -1,12 +1,14 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import type { Comic } from '../api'
 
-defineProps<{
+const props = defineProps<{
   comic: Comic | null
   loading: boolean
   error: string
   createdLabel?: string
   favorited?: boolean
+  snapshotSearchAvailable?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,7 +16,33 @@ const emit = defineEmits<{
   download: []
   tagSearch: [tagName: string]
   toggleFavorite: []
+  detailSearch: [mode: 'global' | 'snapshot']
 }>()
+
+const searchMenuOpen = ref(false)
+
+function toggleSearchMenu() {
+  searchMenuOpen.value = !searchMenuOpen.value
+}
+
+function closeSearchMenu() {
+  searchMenuOpen.value = false
+}
+
+function pickSearch(mode: 'global' | 'snapshot') {
+  if (mode === 'snapshot' && !props.snapshotSearchAvailable) return
+  closeSearchMenu()
+  emit('detailSearch', mode)
+}
+
+watch(
+  () => props.comic?.id,
+  () => {
+    closeSearchMenu()
+  },
+)
+
+defineExpose({ closeSearchMenu })
 </script>
 
 <template>
@@ -47,6 +75,28 @@ const emit = defineEmits<{
           <div class="detail-actions">
             <button type="button" class="detail-btn primary" @click="emit('read')">閱讀</button>
             <button type="button" class="detail-btn primary" @click="emit('download')">下載</button>
+            <div class="detail-search-wrap">
+              <button type="button" class="detail-btn primary" @click.stop="toggleSearchMenu">搜索</button>
+              <div v-if="searchMenuOpen" class="detail-search-menu" @click.stop>
+                <button type="button" class="detail-search-item" @click="pickSearch('global')">
+                  全站搜索
+                </button>
+                <button
+                  type="button"
+                  class="detail-search-item"
+                  :class="{ 'detail-search-item--disabled': !snapshotSearchAvailable }"
+                  :disabled="!snapshotSearchAvailable"
+                  :title="
+                    snapshotSearchAvailable
+                      ? '在該漫畫分類快照內搜索漫畫名稱'
+                      : '此分類尚無快照，請先到快照列表建立'
+                  "
+                  @click="pickSearch('snapshot')"
+                >
+                  快照搜索
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -176,6 +226,44 @@ const emit = defineEmits<{
   border-color: #3d6ef5;
   background: #3d6ef5;
   color: #fff;
+}
+
+.detail-search-wrap {
+  position: relative;
+}
+
+.detail-search-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 112px;
+  padding: 4px 0;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #252525;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.detail-search-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: #eee;
+  font-size: 11px;
+  text-align: left;
+}
+
+.detail-search-item:active:not(:disabled) {
+  background: rgba(61, 110, 245, 0.25);
+}
+
+.detail-search-item--disabled,
+.detail-search-item:disabled {
+  color: #666;
+  cursor: not-allowed;
 }
 
 .detail-tags {

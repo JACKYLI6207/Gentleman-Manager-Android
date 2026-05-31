@@ -216,6 +216,15 @@ pub struct MetaSummary {
     pub scan_target_kind: Option<String>,
 }
 
+pub fn is_favorite_archive_snapshot_file_name(name: &str) -> bool {
+    name.starts_with("收藏漫畫存檔_") || name.starts_with("收藏分頁存檔_")
+}
+
+pub fn is_favorite_archive_snapshot_text(text: &str) -> bool {
+    text.contains("gentleman-manager.favorite-comics.v1")
+        || text.contains("gentleman-manager.favorite-tabs.v1")
+}
+
 pub fn read_meta_summary_from_path(path: &Path) -> anyhow::Result<MetaSummary> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).context("開啟快照檔失敗")?;

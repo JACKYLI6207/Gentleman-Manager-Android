@@ -216,6 +216,14 @@ impl<R: Runtime> FolderPicker<R> {
         Ok(uri_pick_result(res))
     }
 
+    pub fn pick_open_archive(&self) -> crate::errors::CommandResult<Option<String>> {
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<UriResponse>("pickOpenArchive", ())
+            .map_err(|e| crate::errors::CommandError::from("選擇存檔失敗", e))?;
+        Ok(uri_pick_result(res))
+    }
+
     pub fn append_line_to_document(
         &self,
         uri: &str,

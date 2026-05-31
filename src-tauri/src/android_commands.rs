@@ -49,17 +49,42 @@ pub fn save_mobile_settings(app: AppHandle, settings: MobileSettings) -> Command
         .map_err(|e| CommandError::from("儲存設定失敗", e))
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn pick_category_directory(app: AppHandle) -> CommandResult<Option<String>> {
-    let Some(path) = pick_folder_path(&app).await? else {
+async fn pick_writable_folder_path(app: &AppHandle) -> CommandResult<Option<String>> {
+    let Some(path) = pick_folder_path(app).await? else {
         return Ok(None);
     };
-    let mut settings = MobileSettings::load(&app).map_err(|e| CommandError::from("讀取設定失敗", e))?;
-    settings.category_directory = Some(path.clone());
-    settings
-        .save(&app)
-        .map_err(|e| CommandError::from("儲存設定失敗", e))?;
+    #[cfg(target_os = "android")]
+    {
+        let picker = folder_picker(app)?;
+        let writable = picker.probe_tree_writable(&path)?;
+        if !writable {
+            return Err(CommandError::from(
+                "目錄不可寫",
+                anyhow::anyhow!("請改選可寫入目錄（目前目錄僅可讀取）"),
+            ));
+        }
+    }
+    Ok(Some(path))
+}
+
+/// `persist = false` 時僅回傳路徑（供收藏存檔導出等一次性寫入），不覆寫快照資料夾設定。
+#[tauri::command]
+#[specta::specta]
+pub async fn pick_category_directory(
+    app: AppHandle,
+    persist: Option<bool>,
+) -> CommandResult<Option<String>> {
+    let Some(path) = pick_writable_folder_path(&app).await? else {
+        return Ok(None);
+    };
+    if persist.unwrap_or(true) {
+        let mut settings =
+            MobileSettings::load(&app).map_err(|e| CommandError::from("讀取設定失敗", e))?;
+        settings.category_directory = Some(path.clone());
+        settings
+            .save(&app)
+            .map_err(|e| CommandError::from("儲存設定失敗", e))?;
+    }
     Ok(Some(path))
 }
 
@@ -69,7 +94,7 @@ pub async fn pick_import_archive_file(app: AppHandle) -> CommandResult<Option<St
     #[cfg(target_os = "android")]
     {
         let picker = folder_picker(&app)?;
-        return Ok(picker.pick_open_txt()?);
+        return Ok(picker.pick_open_archive()?);
     }
     #[cfg(not(target_os = "android"))]
     {

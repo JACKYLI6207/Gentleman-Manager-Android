@@ -38,6 +38,14 @@ export type MobileSearchTab = {
   gridLayout: GridLayout
   /** 列表比對結果（漫畫 id → 說明） */
   catalogAnalysisEntries?: [number, string][]
+  /** 搜索結果列表捲動位置（切換分頁／底欄時還原） */
+  scrollTop?: number
+  /** 官網列表合併段起始頁（切換分頁時還原，避免切頁誤用他分頁快取） */
+  serverChunkBase?: number
+  /** 官網/API 已載入至第幾頁 */
+  serverPage?: number
+  /** 總筆數是否已依尾頁下修 */
+  totalCountRefined?: boolean
 }
 
 const TABS_KEY = 'gm-android.searchResultTabs.v1'

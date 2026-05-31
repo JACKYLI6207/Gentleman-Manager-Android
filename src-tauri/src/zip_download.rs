@@ -3,6 +3,22 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use scraper::{Html, Selector};
 
+use crate::utils::filename_filter;
+
+/// 將官網 `FILE_NAME` 淨化為可寫入磁碟的 zip 檔名（保留 `.zip` 副檔名）。
+pub fn safe_zip_save_file_name(raw_file_name: &str, comic_id: i64) -> String {
+    let stem = Path::new(raw_file_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(raw_file_name);
+    let safe_stem = filename_filter(stem);
+    if safe_stem.is_empty() {
+        format!("comic-{comic_id}.zip")
+    } else {
+        format!("{safe_stem}.zip")
+    }
+}
+
 /// 下載中的 zip 暫存路徑（例如 `漫畫.zip.part`）。
 pub fn zip_part_path(save_path: &Path) -> PathBuf {
     let mut name = save_path.as_os_str().to_os_string();
@@ -112,6 +128,15 @@ mod tests {
             zip_part_path(&save),
             PathBuf::from(r"C:\dl\每日攻略計畫 30話[完結].zip.part")
         );
+    }
+
+    #[test]
+    fn safe_zip_save_file_name_replaces_invalid_chars() {
+        assert_eq!(
+            safe_zip_save_file_name("命運:貞潔慾女 1-6話.zip", 42),
+            "命運：貞潔慾女 1-6話.zip"
+        );
+        assert_eq!(safe_zip_save_file_name(":::.zip", 99), "：：：.zip");
     }
 
     #[test]
