@@ -1640,7 +1640,16 @@ function clearBrowsePageCache() {
   browseFetchGeneration++
 }
 
-/** 合併官網多頁；僅在「跨頁邊界」去掉重複首筆，頁內與快照/官網 HTML 一致 */
+/** 去掉 pageComics 開頭與 prevId 連續相同的 ID（僅跨頁邊界，不做頁內去重） */
+function trimPageLeadingDuplicateOf(prevId: number, pageComics: ComicInSearch[]): ComicInSearch[] {
+  let trimmed = pageComics
+  while (trimmed.length > 0 && trimmed[0]!.id === prevId) {
+    trimmed = trimmed.slice(1)
+  }
+  return trimmed
+}
+
+/** 合併官網多頁；僅在「跨頁邊界」去掉與前一頁末筆連續相同的 ID，頁內與快照/官網 HTML 一致 */
 function mergeServerPageComics(spStart: number, spEnd: number): ComicInSearch[] {
   syncBrowsePageCacheToContext()
   const merged: ComicInSearch[] = []
@@ -1648,12 +1657,20 @@ function mergeServerPageComics(spStart: number, spEnd: number): ComicInSearch[] 
     const cached = browsePageCache.get(p)
     if (cached === undefined) continue
     let pageComics = cached.comics
-    if (
-      merged.length > 0 &&
-      pageComics.length > 0 &&
-      merged[merged.length - 1]!.id === pageComics[0]!.id
-    ) {
-      pageComics = pageComics.slice(1)
+    if (pageComics.length === 0) {
+      continue
+    }
+    if (merged.length > 0) {
+      pageComics = trimPageLeadingDuplicateOf(merged[merged.length - 1]!.id, pageComics)
+    } else if (p === spStart && p > 1) {
+      const prevCached = browsePageCache.get(p - 1)
+      const prevLast = prevCached?.comics[prevCached.comics.length - 1]
+      if (prevLast !== undefined) {
+        pageComics = trimPageLeadingDuplicateOf(prevLast.id, pageComics)
+      }
+    }
+    if (pageComics.length === 0) {
+      continue
     }
     merged.push(...pageComics)
   }
