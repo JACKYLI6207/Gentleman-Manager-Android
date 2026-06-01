@@ -457,8 +457,12 @@ export function leaveRemoteWifiMode() {
   return invoke<void>('leave_remote_wifi_mode')
 }
 
-export function testRemotePcConnection(hosts: string[], port: number) {
-  return invoke<RemotePcConnectionResult>('test_remote_pc_connection', { hosts, port })
+export function testRemotePcConnection(hosts: string[], port: number, skipWifiBind = false) {
+  return invoke<RemotePcConnectionResult>('test_remote_pc_connection', {
+    hosts,
+    port,
+    skipWifiBind,
+  })
 }
 
 export function listRemotePcDirectory(host: string, port: number, path: string) {
@@ -543,6 +547,10 @@ export function planRemotePcUpload(
     sourceUri,
     kind,
   })
+}
+
+export function cancelRemotePcTransfer() {
+  return invoke<void>('cancel_remote_pc_transfer')
 }
 
 export function uploadRemotePcFiles(

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  cancelRemotePcTransfer,
   listRemotePcDirectory,
   pickRemoteTransferDestination,
   pickRemoteUploadFile,
@@ -67,6 +68,9 @@ const transferOverlayTitle = computed(() => {
   if (!p) return ''
   if (!p.finished) {
     return p.phase === 'uploading' || p.message.includes('上傳') ? '上傳中' : '下載中'
+  }
+  if (p.phase === 'cancelled') {
+    return p.message.includes('上傳') ? '上傳已取消' : '下載已取消'
   }
   if (p.phase === 'partial') {
     return p.message.includes('上傳') ? '上傳完成（部分失敗）' : '下載完成（部分失敗）'
@@ -408,6 +412,16 @@ function closeTransferOverlay() {
   copyLogHint.value = ''
 }
 
+async function cancelActiveTransfer() {
+  if (!transferProgress.value || transferProgress.value.finished) return
+  appendTransferLog('使用者要求取消傳輸…')
+  try {
+    await cancelRemotePcTransfer()
+  } catch (e) {
+    appendTransferLog(`取消指令失敗：${formatInvokeError(e)}`)
+  }
+}
+
 onMounted(async () => {
   void loadDirectory('')
   unlistenTransfer = await listen<RemoteTransferProgressEvent>(
@@ -627,6 +641,14 @@ watch(
             }"
           />
         </div>
+        <button
+          v-if="!transferProgress.finished"
+          type="button"
+          class="tool tool--ghost remote-transfer-cancel"
+          @click="cancelActiveTransfer"
+        >
+          取消
+        </button>
         <button
           v-if="transferProgress.finished"
           type="button"
@@ -1108,7 +1130,8 @@ watch(
   transition: width 0.2s ease;
 }
 
-.remote-transfer-close {
+.remote-transfer-close,
+.remote-transfer-cancel {
   width: 100%;
   margin-top: 8px;
 }

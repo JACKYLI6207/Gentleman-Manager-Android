@@ -1051,8 +1051,15 @@ pub async fn test_remote_pc_connection(
     app: tauri::AppHandle,
     hosts: Vec<String>,
     port: u16,
+    skip_wifi_bind: Option<bool>,
 ) -> crate::pc_remote_discovery::RemotePcConnectionResult {
-    crate::pc_remote_discovery::test_remote_pc_connection(Some(&app), hosts, port).await
+    crate::pc_remote_discovery::test_remote_pc_connection(
+        Some(&app),
+        hosts,
+        port,
+        skip_wifi_bind.unwrap_or(false),
+    )
+    .await
 }
 
 #[tauri::command(async)]
@@ -1142,6 +1149,12 @@ pub async fn plan_remote_pc_upload(
     )
     .await
     .map_err(|err| CommandError::from("規劃上傳失敗", err))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn cancel_remote_pc_transfer() {
+    crate::remote_pc_transfer::request_remote_transfer_cancel();
 }
 
 #[tauri::command(async)]

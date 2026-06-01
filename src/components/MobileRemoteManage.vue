@@ -7,6 +7,12 @@ import {
   testRemotePcConnection,
   type RemotePcListItem,
 } from '../api'
+import {
+  isRemotePcFavorite,
+  loadRemotePcFavorites,
+  toggleRemotePcFavorite,
+  type RemotePcFavorite,
+} from '../remotePcFavoritesStorage'
 import MobileRemoteBrowse from './MobileRemoteBrowse.vue'
 
 const scanning = ref(false)
@@ -20,9 +26,62 @@ const scanLogRef = ref<HTMLTextAreaElement | null>(null)
 const manualIp = ref('')
 const manualPort = ref(8765)
 const manualTesting = ref(false)
+const favorites = ref<RemotePcFavorite[]>([])
+const favoriteConnectingKey = ref('')
 let scanGeneration = 0
 
 const scanLogCopyText = computed(() => scanLog.value)
+
+function favoriteKey(host: string, port: number) {
+  return `${host.trim().toLowerCase()}:${port}`
+}
+
+function isFavoritePc(host: string, port: number) {
+  return isRemotePcFavorite(host, port, favorites.value)
+}
+
+function reloadFavorites() {
+  favorites.value = loadRemotePcFavorites()
+}
+
+function toggleFavorite(pc: { name: string; hosts: string[]; port: number; connectedHost?: string | null }) {
+  const host = pc.connectedHost ?? pc.hosts[0] ?? ''
+  if (!host) return
+  favorites.value = toggleRemotePcFavorite(pc.name, host, pc.port)
+}
+
+async function connectToHost(
+  ip: string,
+  port: number,
+  displayName?: string,
+  options?: { appendLog?: boolean; preferListFront?: boolean },
+) {
+  const result = await testRemotePcConnection([ip], port, true)
+  if (options?.appendLog !== false) {
+    scanLog.value += `\n\n--- 連線 ---\n${ip}:${port} → ${result.message}`
+    showScanLog.value = true
+  }
+  if (!result.connected) {
+    return { ok: false as const, message: result.message }
+  }
+  const item: RemotePcListItem = {
+    name: displayName?.trim() || `PC (${ip})`,
+    hosts: [ip],
+    port,
+    connected: true,
+    message: result.message,
+    connectedHost: result.connectedHost ?? ip,
+  }
+  const existing = pcs.value.findIndex((p) => p.port === port && p.hosts.includes(ip))
+  if (existing >= 0) {
+    pcs.value[existing] = item
+  } else if (options?.preferListFront) {
+    pcs.value = [item, ...pcs.value]
+  } else {
+    pcs.value.push(item)
+  }
+  return { ok: true as const, item, message: result.message }
+}
 
 function appendLog(section: string, lines: string[]) {
   if (!scanLog.value) return
@@ -131,34 +190,18 @@ function openManage(pc: RemotePcListItem) {
 async function connectManualIp() {
   const ip = manualIp.value.trim()
   if (!ip) {
-    status.value = '請輸入 PC 的 IP 位址（例如 192.168.0.100）'
+    status.value = '請輸入 PC 的 IP 位址（區網 192.168.x.x 或 Tailscale 100.x.x.x）'
     return
   }
   manualTesting.value = true
   status.value = `正在連線 ${ip}:${manualPort.value}…`
   try {
-    const result = await testRemotePcConnection([ip], manualPort.value)
-    scanLog.value += `\n\n--- 手動連線 ---\n${ip}:${manualPort.value} → ${result.message}`
-    showScanLog.value = true
-    if (!result.connected) {
+    const result = await connectToHost(ip, manualPort.value, `PC (${ip})`, {
+      preferListFront: true,
+    })
+    if (!result.ok) {
       status.value = result.message
       return
-    }
-    const existing = pcs.value.findIndex(
-      (p) => p.port === manualPort.value && p.hosts.includes(ip),
-    )
-    const item: RemotePcListItem = {
-      name: `PC (${ip})`,
-      hosts: [ip],
-      port: manualPort.value,
-      connected: true,
-      message: result.message,
-      connectedHost: result.connectedHost ?? ip,
-    }
-    if (existing >= 0) {
-      pcs.value[existing] = item
-    } else {
-      pcs.value = [item, ...pcs.value]
     }
     status.value = `已連線 ${ip}，可點「管理」進入`
   } catch (e) {
@@ -168,12 +211,29 @@ async function connectManualIp() {
   }
 }
 
+async function connectFavorite(fav: RemotePcFavorite) {
+  const key = favoriteKey(fav.host, fav.port)
+  favoriteConnectingKey.value = key
+  status.value = `正在連線 ${fav.name}（${fav.host}:${fav.port}）…`
+  try {
+    const result = await connectToHost(fav.host, fav.port, fav.name, { preferListFront: true })
+    status.value = result.ok
+      ? `已連線 ${fav.name}，可點「管理」進入`
+      : result.message
+  } catch (e) {
+    status.value = String(e)
+  } finally {
+    favoriteConnectingKey.value = ''
+  }
+}
+
 onBeforeUnmount(() => {
   scanGeneration++
   void leaveRemoteWifiMode()
 })
 
 onMounted(async () => {
+  reloadFavorites()
   try {
     const wifiMsg = await enterRemoteWifiMode()
     scanLog.value = `[Wi‑Fi 區網模式] ${wifiMsg}\n`
@@ -193,22 +253,61 @@ onMounted(async () => {
   <div v-else class="remote-manage">
     <div class="remote-manage-toolbar">
       <p class="remote-manage-hint">
-        請與 PC 連接<strong>同一 Wi‑Fi</strong>，建議<strong>暫時關閉行動數據</strong>。
-        若其他電腦模擬器能找到、只有本機找不到，可能是路由器<strong> AP 隔離</strong>（手機無法訪問區網內其他裝置）。
-        可用手機瀏覽器試開 <code>http://PC的IP:8765/api/v1/health</code> 驗證。
+        <strong>同一 Wi‑Fi</strong>：按「重新掃描」或手動輸入區網 IP（192.168.x.x）。
+        <strong>4G／跨網（Tailscale）</strong>：手機與 PC 皆開 Tailscale，手動輸入 PC 的
+        <code>100.x.x.x</code> 後按「連線」（不必關 4G）。
+        可將已連線的 PC 按 ★ 收藏，下次一鍵連線。
       </p>
       <button type="button" class="tool tool--primary" :disabled="scanning" @click="refreshList">
         {{ scanning ? '掃描中…' : '重新掃描' }}
       </button>
+      <div v-if="favorites.length > 0" class="remote-favorites">
+        <p class="remote-favorites-label">★ 已收藏 PC</p>
+        <ul class="remote-favorites-list">
+          <li
+            v-for="fav in favorites"
+            :key="`${fav.host}:${fav.port}`"
+            class="remote-favorite-item"
+          >
+            <div class="remote-favorite-main">
+              <span class="remote-favorite-name">{{ fav.name }}</span>
+              <span class="remote-favorite-addr">{{ fav.host }}:{{ fav.port }}</span>
+            </div>
+            <div class="remote-favorite-actions">
+              <button
+                type="button"
+                class="remote-favorite-star on"
+                title="取消收藏"
+                :disabled="favoriteConnectingKey !== '' || manualTesting || scanning"
+                @click="favorites = toggleRemotePcFavorite(fav.name, fav.host, fav.port)"
+              >
+                ★
+              </button>
+              <button
+                type="button"
+                class="tool remote-favorite-connect"
+                :disabled="favoriteConnectingKey !== '' || manualTesting || scanning"
+                @click="connectFavorite(fav)"
+              >
+                {{
+                  favoriteConnectingKey === `${fav.host.toLowerCase()}:${fav.port}`
+                    ? '連線中…'
+                    : '連線'
+                }}
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
       <div class="remote-manual-connect">
-        <p class="remote-manual-label">掃描不到？手動輸入 PC IP（同 Wi‑Fi 網段）</p>
+        <p class="remote-manual-label">手動輸入 PC IP（區網或 Tailscale 100.x.x.x）</p>
         <div class="remote-manual-row">
           <input
             v-model="manualIp"
             class="remote-manual-input"
             type="text"
             inputmode="decimal"
-            placeholder="192.168.0.x"
+            placeholder="100.x.x.x 或 192.168.x.x"
             :disabled="manualTesting || scanning"
           />
           <input
@@ -238,6 +337,16 @@ onMounted(async () => {
           <span class="remote-pc-addr">{{ pc.hosts.join(' / ') }}:{{ pc.port }}</span>
         </div>
         <div class="remote-pc-footer">
+          <button
+            v-if="pc.connected === true"
+            type="button"
+            class="remote-pc-star"
+            :class="{ 'remote-pc-star--on': isFavoritePc(pc.connectedHost ?? pc.hosts[0] ?? '', pc.port) }"
+            :title="isFavoritePc(pc.connectedHost ?? pc.hosts[0] ?? '', pc.port) ? '取消收藏' : '加入收藏'"
+            @click="toggleFavorite(pc)"
+          >
+            {{ isFavoritePc(pc.connectedHost ?? pc.hosts[0] ?? '', pc.port) ? '★' : '☆' }}
+          </button>
           <span
             class="remote-pc-badge"
             :class="{
@@ -336,6 +445,92 @@ onMounted(async () => {
   border-radius: 10px;
   border: 1px dashed var(--gm-border, rgba(255, 255, 255, 0.18));
   background: rgba(0, 0, 0, 0.1);
+}
+
+.remote-favorites {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 215, 0, 0.25);
+  background: rgba(255, 215, 0, 0.06);
+}
+
+.remote-favorites-label {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.remote-favorites-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.remote-favorite-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.remote-favorite-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote-favorite-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.remote-favorite-addr {
+  font-size: 11px;
+  opacity: 0.75;
+  font-family: ui-monospace, monospace;
+}
+
+.remote-favorite-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.remote-favorite-star {
+  border: none;
+  background: transparent;
+  color: #ffd700;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+}
+
+.remote-favorite-connect {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.remote-pc-star {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px 0 0;
+}
+
+.remote-pc-star--on {
+  color: #ffd700;
 }
 
 .remote-manual-label {

@@ -111,6 +111,7 @@ pub fn run() {
             list_remote_pc_directory,
             pick_remote_transfer_destination,
             transfer_remote_pc_files,
+            cancel_remote_pc_transfer,
             pick_remote_upload_file,
             pick_remote_upload_folder,
             plan_remote_pc_upload,

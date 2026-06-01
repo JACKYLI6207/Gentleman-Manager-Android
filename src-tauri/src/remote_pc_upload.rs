@@ -14,8 +14,8 @@ use crate::pc_remote_discovery::{check_remote_upload_conflicts, ensure_pc_remote
 #[cfg(target_os = "android")]
 use crate::folder_picker::folder_picker;
 use crate::remote_pc_transfer::{
-    build_transfer_summary_log, emit_progress_active, RemoteTransferFailedItem,
-    RemoteTransferProgressEvent,
+    build_transfer_summary_log, emit_progress_active, remote_transfer_cancelled,
+    reset_remote_transfer_cancel, RemoteTransferFailedItem, RemoteTransferProgressEvent,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -113,6 +113,7 @@ pub async fn upload_remote_pc_files(
     on_conflict: &str,
 ) -> anyhow::Result<()> {
     ensure_pc_remote_api_v3(host, port).await?;
+    reset_remote_transfer_cancel();
     if files.is_empty() {
         anyhow::bail!("沒有可上傳的檔案");
     }
@@ -144,6 +145,9 @@ pub async fn upload_remote_pc_files(
     );
 
     for (index, file) in files.iter().enumerate() {
+        if remote_transfer_cancelled() {
+            break;
+        }
         let file_index = index as u32 + 1;
         emit_progress_active(
             app,
@@ -216,6 +220,15 @@ pub async fn upload_remote_pc_files(
             };
 
             let body_stream = futures_util::stream::unfold(stream_state, |mut st| async move {
+                if remote_transfer_cancelled() {
+                    return Some((
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "傳輸已取消",
+                        )),
+                        st,
+                    ));
+                }
                 match st.file.read(&mut st.buf).await {
                     Ok(0) => None,
                     Ok(n) => {
@@ -286,6 +299,9 @@ pub async fn upload_remote_pc_files(
             }
             Err(err) => {
                 let chain = err.to_string_chain();
+                if remote_transfer_cancelled() || chain.contains("已取消") {
+                    break;
+                }
                 tracing::warn!(
                     path = %file.dest_relative_path,
                     error = %chain,
@@ -335,7 +351,14 @@ pub async fn upload_remote_pc_files(
     let elapsed = upload_start.elapsed().as_secs_f64().max(0.001);
     let speed = (bytes_done as f64 / elapsed) as u64;
     let summary_log = build_transfer_summary_log(&succeeded, &failed);
-    let message = if failed.is_empty() {
+    let cancelled = remote_transfer_cancelled();
+    let message = if cancelled {
+        format!(
+            "已取消（已上傳 {} / {} 個檔案）",
+            succeeded.len(),
+            file_count
+        )
+    } else if failed.is_empty() {
         format!("上傳完成（{} 個檔案）", succeeded.len())
     } else if succeeded.is_empty() {
         format!("上傳失敗（{} 個檔案皆失敗）", failed.len())
@@ -346,14 +369,16 @@ pub async fn upload_remote_pc_files(
             failed.len()
         )
     };
-    let phase = if succeeded.is_empty() && !failed.is_empty() {
+    let phase = if cancelled {
+        "cancelled"
+    } else if succeeded.is_empty() && !failed.is_empty() {
         "error"
     } else if failed.is_empty() {
         "done"
     } else {
         "partial"
     };
-    let error = if succeeded.is_empty() && !failed.is_empty() {
+    let error = if !cancelled && succeeded.is_empty() && !failed.is_empty() {
         Some(message.clone())
     } else {
         None

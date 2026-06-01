@@ -1,0 +1,17 @@
+## v1.1.0（2026-06-02 更新）
+
+### 區網遠端管理
+- 漫畫主頁 → 遠端管理：掃描 PC、mDNS/UDP、連線測試、可複製 LOG、手動 IP
+- **實機 Wi‑Fi 掃描**：MulticastLock + 強制走 Wi‑Fi（避免行動數據搶路由）
+- **掃描加速**：mDNS/UDP 並行；找到 PC 略過子網全掃；合併重複項目
+- **4G／Tailscale 跨網**：手動輸入 IP 或 ★ 收藏連線時跳過 Wi‑Fi 綁定；支援 `100.x.x.x`
+- **★ 收藏 PC**：本機記住 IP，一鍵連線
+- **傳輸取消**：上傳／下載進度視窗可取消
+- 管理頁：自然排序、多選、**下載**／**上傳**（SAF）、上傳串流進度
+
+### 搭配 PC
+- 需 **Gentleman Manager PC v1.3.0**（`remote_api: 3`；PC 須 **私人網路** + 防火牆允許）
+- 跨網建議 **Tailscale**；PC 可能需額外防火牆規則允許 Tailscale 子網連 8765
+
+### 安裝
+- `Gentleman-Manager-Android-v1.1.0.apk`（四架構完整版）

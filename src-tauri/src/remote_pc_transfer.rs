@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -14,6 +15,20 @@ use tokio::io::AsyncWriteExt;
 use crate::folder_picker::folder_picker;
 use crate::extensions::AnyhowErrorToStringChain;
 use crate::pc_remote_discovery::{ensure_pc_remote_api_v2, list_remote_pc_files};
+
+static REMOTE_TRANSFER_CANCEL: AtomicBool = AtomicBool::new(false);
+
+pub fn reset_remote_transfer_cancel() {
+    REMOTE_TRANSFER_CANCEL.store(false, Ordering::Relaxed);
+}
+
+pub fn request_remote_transfer_cancel() {
+    REMOTE_TRANSFER_CANCEL.store(true, Ordering::Relaxed);
+}
+
+pub fn remote_transfer_cancelled() -> bool {
+    REMOTE_TRANSFER_CANCEL.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -278,6 +293,9 @@ async fn download_remote_file(
     let mut window_bytes = 0_u64;
     let window_start = Instant::now();
     while let Some(chunk) = stream.next().await {
+        if remote_transfer_cancelled() {
+            anyhow::bail!("傳輸已取消");
+        }
         let chunk = chunk.with_context(|| format!("讀取 {relative_path} 串流失敗"))?;
         file.write_all(&chunk).await?;
         file_bytes += chunk.len() as u64;
@@ -327,6 +345,8 @@ pub async fn transfer_remote_pc_files(
 ) -> anyhow::Result<()> {
     ensure_pc_remote_api_v2(host, port).await?;
 
+    reset_remote_transfer_cancel();
+
     tracing::info!(
         host,
         port,
@@ -351,7 +371,14 @@ pub async fn transfer_remote_pc_files(
     {
         Ok(outcome) => {
             let summary_log = build_transfer_summary_log(&outcome.succeeded, &outcome.failed);
-            let message = if outcome.failed.is_empty() {
+            let cancelled = remote_transfer_cancelled();
+            let message = if cancelled {
+                format!(
+                    "已取消（已完成 {} / {} 個檔案）",
+                    outcome.succeeded.len(),
+                    progress_total
+                )
+            } else if outcome.failed.is_empty() {
                 format!("傳輸完成（{} 個檔案）", outcome.succeeded.len())
             } else if outcome.succeeded.is_empty() {
                 format!("傳輸失敗（{} 個檔案皆失敗）", outcome.failed.len())
@@ -362,14 +389,16 @@ pub async fn transfer_remote_pc_files(
                     outcome.failed.len()
                 )
             };
-            let phase = if outcome.succeeded.is_empty() && !outcome.failed.is_empty() {
+            let phase = if cancelled {
+                "cancelled"
+            } else if outcome.succeeded.is_empty() && !outcome.failed.is_empty() {
                 "error"
             } else if outcome.failed.is_empty() {
                 "done"
             } else {
                 "partial"
             };
-            let error = if outcome.succeeded.is_empty() && !outcome.failed.is_empty() {
+            let error = if !cancelled && outcome.succeeded.is_empty() && !outcome.failed.is_empty() {
                 Some(message.clone())
             } else {
                 None
@@ -533,6 +562,9 @@ async fn transfer_remote_pc_files_inner(
     let mut failed: Vec<RemoteTransferFailedItem> = collection_failed;
 
     for (index, file) in files.iter().enumerate() {
+        if remote_transfer_cancelled() {
+            break;
+        }
         let file_index = index as u32 + 1;
         *progress_index = file_index;
         *last_remote_path = file.remote_path.clone();
@@ -610,6 +642,9 @@ async fn transfer_remote_pc_files_inner(
             }
             Err(err) => {
                 let chain = err.to_string_chain();
+                if remote_transfer_cancelled() || chain.contains("已取消") {
+                    break;
+                }
                 tracing::warn!(
                     path = %file.remote_path,
                     error = %chain,

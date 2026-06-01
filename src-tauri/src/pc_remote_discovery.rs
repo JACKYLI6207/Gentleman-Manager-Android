@@ -874,9 +874,24 @@ fn parse_udp_reply(data: &[u8]) -> DiscoveredRemotePc {
     DiscoveredRemotePc { name, hosts, port }
 }
 
+/// Tailscale CGNAT（100.64.0.0/10）或 MagicDNS；應走系統預設路由（含 VPN），不強制 Wi‑Fi 綁定。
+fn is_overlay_vpn_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.');
+    if host.ends_with(".ts.net") || host.ends_with(".tailscale.net") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        let o = ip.octets();
+        return o[0] == 100 && (64..=127).contains(&o[1]);
+    }
+    false
+}
+
 fn host_connection_priority(host: &str) -> u8 {
     if host.starts_with("192.168.") {
         0
+    } else if is_overlay_vpn_host(host) {
+        1
     } else if host.starts_with("10.0.2.") {
         9
     } else if host.starts_with("10.") {
@@ -902,17 +917,21 @@ fn format_wifi_probe_error(probe: &crate::lan_discovery::WifiProbeResult) -> Str
         }
         "timeout" => format!("連線逾時（{detail}）。可能被 AP 隔離或 PC 不在同一子網"),
         "no_route" => format!("無路由（{detail}）。請關閉行動數據，確認與 PC 同一 Wi‑Fi"),
-        "no_wifi" => format!("未找到 Wi‑Fi Network（{detail}）"),
+        "no_wifi" => {
+            format!("未找到 Wi‑Fi Network（{detail}）。跨網請用 Tailscale IP（100.x.x.x）或先連 Wi‑Fi")
+        }
         "http_error" => format!("HTTP 錯誤（{detail}）"),
         _ => format!("不能連線（{kind}：{detail}）"),
     }
 }
 
 /// 依序測試多個 IP，任一成功即視為能連線。
+/// `skip_wifi_bind`：手動輸入 IP 時為 true，不走 Wi‑Fi 綁定，改走系統預設路由（含 Tailscale VPN）。
 pub async fn test_remote_pc_connection<R: tauri::Runtime>(
     app: Option<&AppHandle<R>>,
     hosts: Vec<String>,
     port: u16,
+    skip_wifi_bind: bool,
 ) -> RemotePcConnectionResult {
     let hosts: Vec<String> = sort_hosts_for_connection(
         hosts
@@ -931,41 +950,49 @@ pub async fn test_remote_pc_connection<R: tauri::Runtime>(
 
     let mut last_msg = String::new();
     for host in &hosts {
+        let use_overlay_route = is_overlay_vpn_host(host);
+
         #[cfg(target_os = "android")]
-        if let Some(app_handle) = app {
-            if let Some(discovery) = app_handle.try_state::<crate::lan_discovery::LanDiscovery<R>>()
-            {
-                if discovery.is_available() {
-                    let app_for_blocking = app_handle.clone();
-                    let host_owned = host.clone();
-                    let probe = tauri::async_runtime::spawn_blocking(move || {
-                        app_for_blocking
-                            .try_state::<crate::lan_discovery::LanDiscovery<R>>()
-                            .and_then(|d| {
-                                d.probe_health_on_wifi(
-                                    &host_owned,
-                                    port,
-                                    SUBNET_PROBE_TIMEOUT_MS,
-                                )
-                            })
-                    })
-                    .await
-                    .ok()
-                    .flatten();
-                    if let Some(probe) = probe {
-                        if probe.ok {
-                            return RemotePcConnectionResult {
-                                connected: true,
-                                message: if hosts.len() > 1 {
-                                    format!("能連線（{host}，Wi‑Fi 綁定）")
-                                } else {
-                                    "能連線（Wi‑Fi 綁定）".to_string()
-                                },
-                                connected_host: Some(host.clone()),
-                            };
+        if !skip_wifi_bind && !use_overlay_route {
+            if let Some(app_handle) = app {
+                if let Some(discovery) =
+                    app_handle.try_state::<crate::lan_discovery::LanDiscovery<R>>()
+                {
+                    if discovery.is_available() {
+                        let app_for_blocking = app_handle.clone();
+                        let host_owned = host.clone();
+                        let probe = tauri::async_runtime::spawn_blocking(move || {
+                            app_for_blocking
+                                .try_state::<crate::lan_discovery::LanDiscovery<R>>()
+                                .and_then(|d| {
+                                    d.probe_health_on_wifi(
+                                        &host_owned,
+                                        port,
+                                        SUBNET_PROBE_TIMEOUT_MS,
+                                    )
+                                })
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        if let Some(probe) = probe {
+                            if probe.ok {
+                                return RemotePcConnectionResult {
+                                    connected: true,
+                                    message: if hosts.len() > 1 {
+                                        format!("能連線（{host}，Wi‑Fi 綁定）")
+                                    } else {
+                                        "能連線（Wi‑Fi 綁定）".to_string()
+                                    },
+                                    connected_host: Some(host.clone()),
+                                };
+                            }
+                            last_msg = format_wifi_probe_error(&probe);
+                            // 無 Wi‑Fi（如純 4G + Tailscale）時改走系統預設路由
+                            if probe.error_kind.as_deref() != Some("no_wifi") {
+                                continue;
+                            }
                         }
-                        last_msg = format_wifi_probe_error(&probe);
-                        continue;
                     }
                 }
             }
@@ -975,7 +1002,13 @@ pub async fn test_remote_pc_connection<R: tauri::Runtime>(
         if result.connected {
             return RemotePcConnectionResult {
                 connected: true,
-                message: if hosts.len() > 1 {
+                message: if use_overlay_route {
+                    if hosts.len() > 1 {
+                        format!("能連線（{host}，跨網／VPN）")
+                    } else {
+                        "能連線（跨網／VPN）".to_string()
+                    }
+                } else if hosts.len() > 1 {
                     format!("能連線（{host}）")
                 } else {
                     "能連線".to_string()
