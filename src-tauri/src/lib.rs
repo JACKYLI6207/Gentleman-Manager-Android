@@ -13,6 +13,9 @@ mod korean_txt_catalog;
 mod local_reader;
 mod logger;
 mod mobile_settings;
+mod pc_remote_discovery;
+mod remote_pc_transfer;
+mod remote_pc_upload;
 mod snapshot_catalog;
 mod snapshot_export;
 mod snapshot_large;
@@ -27,6 +30,7 @@ use anyhow::Context;
 use config::Config;
 use download_manager::DownloadManager;
 use events::{DownloadSleepingEvent, DownloadSpeedEvent, DownloadTaskEvent, LogEvent};
+use remote_pc_transfer::RemoteTransferProgressEvent;
 use mobile_settings::MobileSettings;
 use parking_lot::RwLock;
 use tauri::{Manager, Wry};
@@ -98,6 +102,15 @@ pub fn run() {
             close_local_reader_zip_session,
             read_snapshot_export_file,
             read_korean_txt_catalog,
+            scan_lan_remote_pcs,
+            test_remote_pc_connection,
+            list_remote_pc_directory,
+            pick_remote_transfer_destination,
+            transfer_remote_pc_files,
+            pick_remote_upload_file,
+            pick_remote_upload_folder,
+            plan_remote_pc_upload,
+            upload_remote_pc_files,
         ])
         .events(tauri_specta::collect_events![
             LogEvent,
@@ -106,6 +119,7 @@ pub fn run() {
             DownloadSleepingEvent,
             DownloadShelfEvent,
             SearchScanProgressEvent,
+            RemoteTransferProgressEvent,
         ]);
 
     let mut tauri_builder = tauri::Builder::default();

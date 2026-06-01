@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     plugin::{Builder, PluginApi, TauriPlugin},
     AppHandle, Manager, Runtime, State,
@@ -24,6 +24,14 @@ fn uri_pick_result(res: UriResponse) -> Option<String> {
 #[derive(Debug, Deserialize)]
 struct TextResponse {
     text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidUploadFile {
+    pub uri: String,
+    pub relative_path: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -514,6 +522,46 @@ impl<R: Runtime> FolderPicker<R> {
                     anyhow::anyhow!("未取得目標 URI"),
                 )
             })
+    }
+
+    pub fn pick_upload_document(&self) -> crate::errors::CommandResult<Option<String>> {
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<UriResponse>("pickUploadDocument", ())
+            .map_err(|e| crate::errors::CommandError::from("選擇上傳檔案失敗", e))?;
+        Ok(uri_pick_result(res))
+    }
+
+    pub fn pick_upload_folder(&self) -> crate::errors::CommandResult<Option<String>> {
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<UriResponse>("pickUploadFolder", ())
+            .map_err(|e| crate::errors::CommandError::from("選擇上傳資料夾失敗", e))?;
+        Ok(uri_pick_result(res))
+    }
+
+    pub fn list_upload_files(
+        &self,
+        uri: &str,
+        kind: &str,
+    ) -> crate::errors::CommandResult<Vec<AndroidUploadFile>> {
+        #[derive(serde::Serialize)]
+        struct Payload<'a> {
+            uri: &'a str,
+            kind: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct UploadFilesResponse {
+            files: Vec<AndroidUploadFile>,
+        }
+        let res = self
+            .handle()?
+            .run_mobile_plugin::<UploadFilesResponse>(
+                "listUploadFiles",
+                Payload { uri, kind },
+            )
+            .map_err(|e| crate::errors::CommandError::from("列出上傳檔案失敗", e))?;
+        Ok(res.files)
     }
 
     pub fn probe_tree_writable(&self, tree_uri: &str) -> crate::errors::CommandResult<bool> {

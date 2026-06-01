@@ -7,6 +7,7 @@ import MobileComicRead from './components/MobileComicRead.vue'
 import MobileDownloadPanel from './components/MobileDownloadPanel.vue'
 import MobileFavoritesPanel from './components/MobileFavoritesPanel.vue'
 import MobileLocalRead from './components/MobileLocalRead.vue'
+import MobileRemoteManage from './components/MobileRemoteManage.vue'
 import MobileKoreanDownloadDialog from './components/MobileKoreanDownloadDialog.vue'
 import MobileSettingsPanel from './components/MobileSettingsPanel.vue'
 import MobileSnapshotResumeDialog from './components/MobileSnapshotResumeDialog.vue'
@@ -107,7 +108,7 @@ import {
 } from './comicDetailSearch'
 
 type TabId = 'home' | 'download' | 'settings'
-type SubNav = 'search' | 'detail' | 'read' | 'favorites' | 'snapshots'
+type SubNav = 'search' | 'detail' | 'read' | 'favorites' | 'snapshots' | 'remote'
 type ReadMode = 'online' | 'local'
 type FavoritesSection = 'comics' | 'tabs'
 
@@ -119,6 +120,11 @@ const FAVORITES_MENU_ITEMS: { key: FavoritesSection; label: string }[] = [
 const READ_MENU_ITEMS: { key: ReadMode; label: string }[] = [
   { key: 'online', label: '在線閱讀' },
   { key: 'local', label: '本地閱讀' },
+]
+
+const COMIC_HOME_MENU_ITEMS: { key: 'search' | 'detail'; label: string }[] = [
+  { key: 'search', label: '漫畫搜索' },
+  { key: 'detail', label: '漫畫詳情' },
 ]
 type BrowseKind = 'home' | 'albums' | 'category' | 'ranking' | 'keyword' | 'snapshot' | 'none'
 
@@ -148,6 +154,7 @@ const favSortMenuOpen = ref(false)
 const favPageSizeMenuOpen = ref(false)
 const favLayoutMenuOpen = ref(false)
 const readMenuOpen = ref(false)
+const comicHomeMenuOpen = ref(false)
 const readMode = ref<ReadMode>('online')
 const favoritesMenuOpen = ref(false)
 const favoritesSection = ref<FavoritesSection>('tabs')
@@ -727,6 +734,7 @@ function closeMenus() {
   favPageSizeMenuOpen.value = false
   favLayoutMenuOpen.value = false
   readMenuOpen.value = false
+  comicHomeMenuOpen.value = false
   favoritesMenuOpen.value = false
   pageJumpOpen.value = false
   favPageJumpOpen.value = false
@@ -1144,6 +1152,7 @@ function toggleFavoritesMenu(ev: Event) {
   favoritesMenuOpen.value = !wasOpen
   expandedNavParent.value = null
   readMenuOpen.value = false
+  comicHomeMenuOpen.value = false
 }
 
 function openFavoritesSection(section: FavoritesSection) {
@@ -1239,6 +1248,26 @@ function openSnapshotList() {
   if (categoryDir.value.trim()) {
     void refreshSnapshotList()
   }
+}
+
+function openRemoteManagement() {
+  closeMenus()
+  expandedNavParent.value = null
+  subNav.value = 'remote'
+}
+
+function toggleComicHomeMenu(ev: Event) {
+  ev.stopPropagation()
+  const wasOpen = comicHomeMenuOpen.value
+  closeMenus()
+  comicHomeMenuOpen.value = !wasOpen
+  readMenuOpen.value = false
+  favoritesMenuOpen.value = false
+}
+
+function selectComicHomeSection(mode: 'search' | 'detail') {
+  comicHomeMenuOpen.value = false
+  setSubNav(mode)
 }
 
 function snapshotHeaderDate(header: SnapshotCategoryHeader): Date | null {
@@ -1341,6 +1370,7 @@ function toggleReadMenu(ev: Event) {
   const wasOpen = readMenuOpen.value
   closeMenus()
   readMenuOpen.value = !wasOpen
+  comicHomeMenuOpen.value = false
   favoritesMenuOpen.value = false
   expandedNavParent.value = null
 }
@@ -2845,12 +2875,29 @@ onUnmounted(() => {
 
         <div class="sub-nav-row">
         <nav class="sub-nav">
-          <button type="button" class="sub-link sub-link--tab" :class="{ on: subNav === 'search' }" @click.stop="setSubNav('search')">
-            <span class="sub-link-text">漫畫搜索</span>
-          </button>
-          <button type="button" class="sub-link sub-link--tab" :class="{ on: subNav === 'detail' }" @click.stop="setSubNav('detail')">
-            <span class="sub-link-text">漫畫詳情</span>
-          </button>
+          <div class="sub-dd sub-dd--tab">
+            <button
+              type="button"
+              class="sub-link sub-link--tab"
+              :class="{ on: comicHomeMenuOpen || subNav === 'search' || subNav === 'detail' }"
+              @click.stop="toggleComicHomeMenu"
+            >
+              <span class="sub-link-text">漫畫主頁</span>
+              <span class="sub-link-caret" aria-hidden="true">{{ comicHomeMenuOpen ? '▴' : '▾' }}</span>
+            </button>
+            <div v-if="comicHomeMenuOpen" class="read-menu-float" @click.stop>
+              <button
+                v-for="item in COMIC_HOME_MENU_ITEMS"
+                :key="item.key"
+                type="button"
+                class="cat-menu-item"
+                :class="{ on: subNav === item.key }"
+                @click.stop="selectComicHomeSection(item.key)"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+          </div>
           <div class="sub-dd sub-dd--tab">
             <button
               type="button"
@@ -2904,6 +2951,14 @@ onUnmounted(() => {
             @click.stop="openSnapshotList"
           >
             <span class="sub-link-text">快照列表</span>
+          </button>
+          <button
+            type="button"
+            class="sub-link sub-link--tab"
+            :class="{ on: subNav === 'remote' }"
+            @click.stop="openRemoteManagement"
+          >
+            <span class="sub-link-text">遠端管理</span>
           </button>
         </nav>
         </div>
@@ -3066,6 +3121,10 @@ onUnmounted(() => {
         @open-tab="openFavoriteTabBookmark"
         @remove-tab="(sid) => { favoriteSearchTabs = favoriteSearchTabs.filter((b) => b.sourceTabId !== sid); saveFavoriteSearchTabs(favoriteSearchTabs) }"
       />
+
+      <div v-show="subNav === 'remote'" class="comic-scroll remote-manage-scroll">
+        <MobileRemoteManage />
+      </div>
 
       <div v-show="subNav === 'snapshots'" class="comic-scroll snapshot-list-scroll">
         <div v-if="snapshotListLoading" class="loading-mask">讀取快照列表…</div>
@@ -3737,6 +3796,13 @@ onUnmounted(() => {
   position: relative;
   z-index: 50;
   overflow: visible;
+}
+
+.remote-manage-scroll {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
 }
 
 .sub-nav {

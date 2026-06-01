@@ -37,6 +37,8 @@ android {
             }
         }
         getByName("release") {
+            // 區網遠端管理使用 http://192.168.x.x，須允許明文 HTTP
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

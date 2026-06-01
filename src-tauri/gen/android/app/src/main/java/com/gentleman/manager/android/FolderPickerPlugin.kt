@@ -3,6 +3,7 @@ package com.gentleman.manager.android
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -922,6 +923,194 @@ class FolderPickerPlugin(private val activity: Activity) : Plugin(activity) {
         return activity.contentResolver.openOutputStream(uri, "rwt")
             ?: activity.contentResolver.openOutputStream(uri, "w")
             ?: activity.contentResolver.openOutputStream(uri)
+    }
+
+    @Command
+    fun pickUploadDocument(invoke: Invoke) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(invoke, intent, "pickUploadDocumentResult")
+    }
+
+    @ActivityCallback
+    fun pickUploadDocumentResult(invoke: Invoke, result: androidx.activity.result.ActivityResult) {
+        if (result.resultCode != Activity.RESULT_OK) {
+            resolvePickCancelledOnUi(invoke)
+            return
+        }
+        val uri = result.data?.data
+        if (uri == null) {
+            rejectOnUi(invoke, "未取得檔案 URI")
+            return
+        }
+        try {
+            activity.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+        }
+        val ret = JSObject()
+        ret.put("uri", uri.toString())
+        val name = DocumentFile.fromSingleUri(activity, uri)?.name
+        if (!name.isNullOrBlank()) {
+            ret.put("name", name)
+        }
+        resolveOnUi(invoke, ret)
+    }
+
+    @Command
+    fun pickUploadFolder(invoke: Invoke) {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            )
+        }
+        startActivityForResult(invoke, intent, "pickUploadFolderResult")
+    }
+
+    @ActivityCallback
+    fun pickUploadFolderResult(invoke: Invoke, result: androidx.activity.result.ActivityResult) {
+        if (result.resultCode != Activity.RESULT_OK) {
+            resolvePickCancelledOnUi(invoke)
+            return
+        }
+        val uri = result.data?.data
+        if (uri == null) {
+            rejectOnUi(invoke, "未取得目錄 URI")
+            return
+        }
+        try {
+            activity.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+        }
+        val ret = JSObject()
+        ret.put("uri", uri.toString())
+        resolveOnUi(invoke, ret)
+    }
+
+    @Command
+    fun listUploadFiles(invoke: Invoke) {
+        try {
+            val raw = invoke.getArgs()
+            val uriStr = raw.getString("uri", "")?.trim().orEmpty()
+            val kind = raw.getString("kind", "file")?.trim().orEmpty()
+            if (uriStr.isEmpty()) {
+                throw IllegalArgumentException("缺少 uri")
+            }
+            val files = JSArray()
+            if (kind == "tree" || kind == "folder") {
+                val root = DocumentFile.fromTreeUri(activity, Uri.parse(uriStr))
+                    ?: throw IllegalStateException("無法讀取資料夾")
+                val rootName = root.name?.trim().orEmpty()
+                collectUploadFiles(root, "", files)
+                if (files.length() == 0) {
+                    collectUploadFilesViaContract(Uri.parse(uriStr), rootName, files)
+                }
+                if (rootName.isNotEmpty()) {
+                    prependRootFolderName(files, rootName)
+                }
+                if (files.length() == 0) {
+                    throw IllegalStateException("資料夾內沒有可上傳的檔案")
+                }
+            } else {
+                val doc = DocumentFile.fromSingleUri(activity, Uri.parse(uriStr))
+                    ?: throw IllegalStateException("無法讀取檔案")
+                val name = doc.name ?: "file"
+                val item = JSObject()
+                item.put("uri", uriStr)
+                item.put("relativePath", name)
+                item.put("size", doc.length())
+                files.put(item)
+            }
+            val ret = JSObject()
+            ret.put("files", files)
+            invoke.resolve(ret)
+        } catch (ex: Exception) {
+            invoke.reject(ex.message ?: "列出上傳檔案失敗")
+        }
+    }
+
+    private fun prependRootFolderName(files: JSArray, rootName: String) {
+        for (i in 0 until files.length()) {
+            val item = files.getJSONObject(i)
+            val rel = item.optString("relativePath", "").trim()
+            item.put("relativePath", if (rel.isEmpty()) rootName else "$rootName/$rel")
+        }
+    }
+
+    /** 部分模擬器 DocumentFile.listFiles() 回傳空，改用 DocumentsContract 遞迴列檔。 */
+    private fun collectUploadFilesViaContract(treeUri: Uri, rootName: String, out: JSArray) {
+        val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        walkUploadTreeChildren(treeUri, treeDocId, "", rootName, out)
+    }
+
+    private fun walkUploadTreeChildren(
+        treeUri: Uri,
+        parentDocId: String,
+        relativePrefix: String,
+        rootName: String,
+        out: JSArray,
+    ) {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+        )
+        activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            while (cursor.moveToNext()) {
+                val docId = cursor.getString(idCol) ?: continue
+                val name = cursor.getString(nameCol)?.trim().orEmpty()
+                if (name.isEmpty()) continue
+                val mime = cursor.getString(mimeCol).orEmpty()
+                val rel = if (relativePrefix.isEmpty()) name else "$relativePrefix/$name"
+                if (DocumentsContract.Document.MIME_TYPE_DIR == mime) {
+                    walkUploadTreeChildren(treeUri, docId, rel, rootName, out)
+                    continue
+                }
+                val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                val item = JSObject()
+                item.put("uri", docUri.toString())
+                item.put("relativePath", rel)
+                item.put("size", if (sizeCol >= 0) cursor.getLong(sizeCol) else 0L)
+                out.put(item)
+            }
+        }
+    }
+
+    private fun collectUploadFiles(dir: DocumentFile, prefix: String, out: JSArray) {
+        val children = dir.listFiles() ?: return
+        for (child in children) {
+            val name = child.name?.trim().orEmpty()
+            if (name.isEmpty()) continue
+            if (child.isDirectory) {
+                val next = if (prefix.isEmpty()) name else "$prefix/$name"
+                collectUploadFiles(child, next, out)
+                continue
+            }
+            val rel = if (prefix.isEmpty()) name else "$prefix/$name"
+            val item = JSObject()
+            item.put("uri", child.uri.toString())
+            item.put("relativePath", rel)
+            item.put("size", child.length())
+            out.put(item)
+        }
     }
 
     @Command

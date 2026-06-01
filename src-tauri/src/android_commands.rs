@@ -49,7 +49,7 @@ pub fn save_mobile_settings(app: AppHandle, settings: MobileSettings) -> Command
         .map_err(|e| CommandError::from("儲存設定失敗", e))
 }
 
-async fn pick_writable_folder_path(app: &AppHandle) -> CommandResult<Option<String>> {
+pub(crate) async fn pick_writable_folder_path(app: &AppHandle) -> CommandResult<Option<String>> {
     let Some(path) = pick_folder_path(app).await? else {
         return Ok(None);
     };

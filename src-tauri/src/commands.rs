@@ -1008,3 +1008,123 @@ pub async fn download_shelf(app: AppHandle, shelf_id: i64) -> CommandResult<()> 
 
     Ok(())
 }
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn scan_lan_remote_pcs() -> CommandResult<Vec<crate::pc_remote_discovery::DiscoveredRemotePc>> {
+    crate::pc_remote_discovery::scan_lan_remote_pcs()
+        .await
+        .map_err(|err| CommandError::from("掃描區網 PC 失敗", err))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn test_remote_pc_connection(
+    hosts: Vec<String>,
+    port: u16,
+) -> crate::pc_remote_discovery::RemotePcConnectionResult {
+    crate::pc_remote_discovery::test_remote_pc_connection(hosts, port).await
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn list_remote_pc_directory(
+    host: String,
+    port: u16,
+    path: String,
+) -> CommandResult<crate::pc_remote_discovery::RemotePcBrowseResult> {
+    crate::pc_remote_discovery::list_remote_pc_directory(&host, port, &path)
+        .await
+        .map_err(|err| CommandError::from("讀取 PC 資料夾失敗", err))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn pick_remote_transfer_destination(
+    app: AppHandle,
+) -> CommandResult<Option<String>> {
+    crate::android_commands::pick_writable_folder_path(&app).await
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn transfer_remote_pc_files(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    selections: Vec<crate::remote_pc_transfer::RemotePcTransferSelection>,
+    dest_tree_uri: String,
+) -> CommandResult<()> {
+    crate::remote_pc_transfer::transfer_remote_pc_files(
+        &app, &host, port, &selections, &dest_tree_uri,
+    )
+        .await
+        .map_err(|err| CommandError::from("遠端下載失敗", err))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn pick_remote_upload_file(app: AppHandle) -> CommandResult<Option<String>> {
+    #[cfg(target_os = "android")]
+    {
+        let picker = crate::folder_picker::folder_picker(&app)
+            .map_err(|e| CommandError::from("選擇上傳檔案失敗", anyhow::anyhow!("{}", e.err_message)))?;
+        return picker
+            .pick_upload_document()
+            .map_err(|e| CommandError::from("選擇上傳檔案失敗", anyhow::anyhow!("{}", e.err_message)));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn pick_remote_upload_folder(app: AppHandle) -> CommandResult<Option<String>> {
+    #[cfg(target_os = "android")]
+    {
+        let picker = crate::folder_picker::folder_picker(&app)
+            .map_err(|e| CommandError::from("選擇上傳資料夾失敗", anyhow::anyhow!("{}", e.err_message)))?;
+        return picker
+            .pick_upload_folder()
+            .map_err(|e| CommandError::from("選擇上傳資料夾失敗", anyhow::anyhow!("{}", e.err_message)));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn plan_remote_pc_upload(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    pc_dest_dir: String,
+    source_uri: String,
+    kind: String,
+) -> CommandResult<crate::remote_pc_upload::RemoteUploadPlan> {
+    crate::remote_pc_upload::plan_remote_pc_upload(
+        &app, &host, port, &pc_dest_dir, &source_uri, &kind,
+    )
+    .await
+    .map_err(|err| CommandError::from("規劃上傳失敗", err))
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn upload_remote_pc_files(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    files: Vec<crate::remote_pc_upload::RemoteUploadPlanItem>,
+    on_conflict: String,
+) -> CommandResult<()> {
+    crate::remote_pc_upload::upload_remote_pc_files(&app, &host, port, files, &on_conflict)
+        .await
+        .map_err(|err| CommandError::from("遠端上傳失敗", err))
+}

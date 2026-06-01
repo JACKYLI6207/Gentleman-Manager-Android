@@ -410,3 +410,141 @@ export async function listenDownloadTaskEvent(
 ): Promise<UnlistenFn> {
   return listen<DownloadTaskEvent>('download-task-event', (ev) => handler(ev.payload))
 }
+
+export type DiscoveredRemotePc = {
+  name: string
+  hosts: string[]
+  port: number
+}
+
+export type RemotePcConnectionResult = {
+  connected: boolean
+  message: string
+  connectedHost: string | null
+}
+
+export type RemotePcListItem = DiscoveredRemotePc & {
+  connected: boolean | null
+  message: string
+  connectedHost: string | null
+}
+
+export type RemotePcDirEntry = {
+  name: string
+  isDir: boolean
+  size: number | null
+}
+
+export type RemotePcBrowseResult = {
+  path: string
+  entries: RemotePcDirEntry[]
+}
+
+export function scanLanRemotePcs() {
+  return invoke<DiscoveredRemotePc[]>('scan_lan_remote_pcs')
+}
+
+export function testRemotePcConnection(hosts: string[], port: number) {
+  return invoke<RemotePcConnectionResult>('test_remote_pc_connection', { hosts, port })
+}
+
+export function listRemotePcDirectory(host: string, port: number, path: string) {
+  return invoke<RemotePcBrowseResult>('list_remote_pc_directory', { host, port, path })
+}
+
+export type RemotePcFileItem = {
+  relativePath: string
+  size: number
+}
+
+export type RemoteTransferFailedItem = {
+  path: string
+  error: string
+}
+
+export type RemoteTransferProgressEvent = {
+  phase: string
+  fileIndex: number
+  fileCount: number
+  bytesDone: number
+  bytesTotal: number
+  speedBps: number
+  message: string
+  finished: boolean
+  error: string | null
+  detailLog?: string | null
+  succeededPaths?: string[] | null
+  failedItems?: RemoteTransferFailedItem[] | null
+}
+
+export function pickRemoteTransferDestination() {
+  return invoke<string | null>('pick_remote_transfer_destination')
+}
+
+export type RemotePcTransferSelection = {
+  path: string
+  anchorPath: string
+}
+
+export function transferRemotePcFiles(
+  host: string,
+  port: number,
+  selections: RemotePcTransferSelection[],
+  destTreeUri: string,
+) {
+  return invoke<null>('transfer_remote_pc_files', { host, port, selections, destTreeUri })
+}
+
+export type RemoteUploadPlanItem = {
+  sourceUri: string
+  destRelativePath: string
+  size: number
+}
+
+export type RemoteUploadPlan = {
+  files: RemoteUploadPlanItem[]
+  conflicts: string[]
+}
+
+export type RemoteUploadConflictPolicy = 'overwrite' | 'keep_both'
+
+export function pickRemoteUploadFile() {
+  return invoke<string | null>('pick_remote_upload_file')
+}
+
+export function pickRemoteUploadFolder() {
+  return invoke<string | null>('pick_remote_upload_folder')
+}
+
+export function planRemotePcUpload(
+  host: string,
+  port: number,
+  pcDestDir: string,
+  sourceUri: string,
+  kind: 'file' | 'folder',
+) {
+  return invoke<RemoteUploadPlan>('plan_remote_pc_upload', {
+    host,
+    port,
+    pcDestDir,
+    sourceUri,
+    kind,
+  })
+}
+
+export function uploadRemotePcFiles(
+  host: string,
+  port: number,
+  files: RemoteUploadPlanItem[],
+  onConflict: RemoteUploadConflictPolicy,
+) {
+  return invoke<null>('upload_remote_pc_files', { host, port, files, onConflict })
+}
+
+export async function listenRemoteTransferProgress(
+  handler: (payload: RemoteTransferProgressEvent) => void,
+): Promise<import('@tauri-apps/api/event').UnlistenFn> {
+  return listen<RemoteTransferProgressEvent>('remote-transfer-progress-event', (ev) =>
+    handler(ev.payload),
+  )
+}
