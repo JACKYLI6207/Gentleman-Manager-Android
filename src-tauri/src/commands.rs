@@ -1009,10 +1009,38 @@ pub async fn download_shelf(app: AppHandle, shelf_id: i64) -> CommandResult<()> 
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn enter_remote_wifi_mode(app: tauri::AppHandle) -> String {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(state) = app.try_state::<crate::lan_discovery::LanDiscovery<tauri::Wry>>() {
+            return state.begin_wifi_session();
+        }
+        return "LanDiscoveryPlugin 未載入".to_string();
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        String::new()
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn leave_remote_wifi_mode(app: tauri::AppHandle) {
+    #[cfg(target_os = "android")]
+    if let Some(state) = app.try_state::<crate::lan_discovery::LanDiscovery<tauri::Wry>>() {
+        state.end_wifi_session();
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+}
+
 #[tauri::command(async)]
 #[specta::specta]
-pub async fn scan_lan_remote_pcs() -> CommandResult<Vec<crate::pc_remote_discovery::DiscoveredRemotePc>> {
-    crate::pc_remote_discovery::scan_lan_remote_pcs()
+pub async fn scan_lan_remote_pcs(app: tauri::AppHandle) -> CommandResult<crate::pc_remote_discovery::RemotePcScanResult> {
+    crate::pc_remote_discovery::scan_lan_remote_pcs(&app)
         .await
         .map_err(|err| CommandError::from("掃描區網 PC 失敗", err))
 }
@@ -1020,10 +1048,11 @@ pub async fn scan_lan_remote_pcs() -> CommandResult<Vec<crate::pc_remote_discove
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn test_remote_pc_connection(
+    app: tauri::AppHandle,
     hosts: Vec<String>,
     port: u16,
 ) -> crate::pc_remote_discovery::RemotePcConnectionResult {
-    crate::pc_remote_discovery::test_remote_pc_connection(hosts, port).await
+    crate::pc_remote_discovery::test_remote_pc_connection(Some(&app), hosts, port).await
 }
 
 #[tauri::command(async)]

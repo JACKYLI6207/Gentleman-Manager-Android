@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use base64::Engine;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::AppHandle;
@@ -159,26 +160,104 @@ pub async fn upload_remote_pc_files(
         );
 
         let upload_result: anyhow::Result<u64> = async {
+            emit_progress_active(
+                app,
+                "uploading",
+                file_index,
+                file_count,
+                bytes_done,
+                bytes_total,
+                0,
+                &format!("準備：{}", file.dest_relative_path),
+                false,
+                None,
+                None,
+            );
+
             let cache_path = picker
                 .cache_document_to_file(&file.source_uri)
                 .map_err(|e| anyhow::anyhow!("{}", e.err_message))?;
-            let mut local = tokio::fs::File::open(&cache_path)
+            let file_len = tokio::fs::metadata(&cache_path)
                 .await
-                .with_context(|| format!("開啟暫存檔失敗：{}", cache_path))?;
-            let mut body_buf = Vec::new();
-            local
-                .read_to_end(&mut body_buf)
-                .await
-                .with_context(|| format!("讀取上傳檔失敗：{}", file.dest_relative_path))?;
-            let uploaded_len = body_buf.len() as u64;
+                .with_context(|| format!("讀取暫存檔大小失敗：{}", cache_path))?
+                .len();
             let path_b64 = base64::engine::general_purpose::STANDARD
                 .encode(file.dest_relative_path.as_bytes());
+
+            struct UploadStreamState {
+                file: tokio::fs::File,
+                buf: Vec<u8>,
+                file_base: u64,
+                bytes_in_file: u64,
+                last_emit: Instant,
+                app: AppHandle,
+                file_index: u32,
+                file_count: u32,
+                bytes_total: u64,
+                upload_start: Instant,
+                dest_path: String,
+            }
+
+            let file_handle = tokio::fs::File::open(&cache_path)
+                .await
+                .with_context(|| format!("開啟暫存檔失敗：{}", cache_path))?;
+            let stream_state = UploadStreamState {
+                file: file_handle,
+                buf: vec![0u8; 65536],
+                file_base: bytes_done,
+                bytes_in_file: 0,
+                last_emit: Instant::now(),
+                app: app.clone(),
+                file_index,
+                file_count,
+                bytes_total,
+                upload_start,
+                dest_path: file.dest_relative_path.clone(),
+            };
+
+            let body_stream = futures_util::stream::unfold(stream_state, |mut st| async move {
+                match st.file.read(&mut st.buf).await {
+                    Ok(0) => None,
+                    Ok(n) => {
+                        st.bytes_in_file += n as u64;
+                        let now = Instant::now();
+                        if now.duration_since(st.last_emit) >= Duration::from_millis(250) {
+                            st.last_emit = now;
+                            let elapsed = st.upload_start.elapsed().as_secs_f64().max(0.001);
+                            let current = st.file_base + st.bytes_in_file;
+                            let speed = (current as f64 / elapsed) as u64;
+                            emit_progress_active(
+                                &st.app,
+                                "uploading",
+                                st.file_index,
+                                st.file_count,
+                                current,
+                                st.bytes_total,
+                                speed,
+                                &st.dest_path,
+                                false,
+                                None,
+                                None,
+                            );
+                        }
+                        let chunk = Bytes::copy_from_slice(&st.buf[..n]);
+                        Some((Ok(chunk), st))
+                    }
+                    Err(e) => Some((
+                        Err(std::io::Error::new(
+                            e.kind(),
+                            format!("讀取上傳檔失敗：{}", e),
+                        )),
+                        st,
+                    )),
+                }
+            });
 
             let resp = client
                 .post(format!("http://{host}:{port}/api/v1/upload"))
                 .header("X-GM-Rel-Path-B64", path_b64)
                 .header("X-GM-On-Conflict", on_conflict)
-                .body(body_buf)
+                .body(reqwest::Body::wrap_stream(body_stream))
                 .send()
                 .await
                 .with_context(|| format!("上傳失敗：{}", file.dest_relative_path))?;
@@ -196,7 +275,7 @@ pub async fn upload_remote_pc_files(
                 );
             }
             let _ = tokio::fs::remove_file(&cache_path).await;
-            Ok(uploaded_len)
+            Ok(file_len)
         }
         .await;
 

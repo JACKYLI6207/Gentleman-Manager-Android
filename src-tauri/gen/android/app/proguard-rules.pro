@@ -4,6 +4,8 @@
 
 # Keep custom Android plugin classes used by Rust register_android_plugin.
 -keep class com.gentleman.manager.android.FolderPickerPlugin { *; }
+-keep class com.gentleman.manager.android.LanDiscoveryPlugin { *; }
+-keep class com.gentleman.manager.android.LanDiscoveryPlugin$* { *; }
 -keep class com.gentleman.manager.android.ReadArgs { *; }
 -keep class com.gentleman.manager.android.TreeArgs { *; }
 -keep class com.gentleman.manager.android.CopyToTreeArgs { *; }

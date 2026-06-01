@@ -1381,6 +1381,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "if-addrs",
  "image",
  "mdns-sd",
  "notify",

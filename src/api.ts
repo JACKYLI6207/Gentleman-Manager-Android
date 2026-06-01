@@ -440,8 +440,21 @@ export type RemotePcBrowseResult = {
   entries: RemotePcDirEntry[]
 }
 
+export type RemotePcScanResult = {
+  pcs: DiscoveredRemotePc[]
+  log: string
+}
+
 export function scanLanRemotePcs() {
-  return invoke<DiscoveredRemotePc[]>('scan_lan_remote_pcs')
+  return invoke<RemotePcScanResult>('scan_lan_remote_pcs')
+}
+
+export function enterRemoteWifiMode() {
+  return invoke<string>('enter_remote_wifi_mode')
+}
+
+export function leaveRemoteWifiMode() {
+  return invoke<void>('leave_remote_wifi_mode')
 }
 
 export function testRemotePcConnection(hosts: string[], port: number) {

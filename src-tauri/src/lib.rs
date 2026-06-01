@@ -8,6 +8,8 @@ mod events;
 mod extensions;
 #[cfg(target_os = "android")]
 mod folder_picker;
+#[cfg(target_os = "android")]
+mod lan_discovery;
 mod korean_series_folder;
 mod korean_txt_catalog;
 mod local_reader;
@@ -103,6 +105,8 @@ pub fn run() {
             read_snapshot_export_file,
             read_korean_txt_catalog,
             scan_lan_remote_pcs,
+            enter_remote_wifi_mode,
+            leave_remote_wifi_mode,
             test_remote_pc_connection,
             list_remote_pc_directory,
             pick_remote_transfer_destination,
@@ -125,7 +129,9 @@ pub fn run() {
     let mut tauri_builder = tauri::Builder::default();
     #[cfg(target_os = "android")]
     {
-        tauri_builder = tauri_builder.plugin(crate::folder_picker::init());
+        tauri_builder = tauri_builder
+            .plugin(crate::folder_picker::init())
+            .plugin(crate::lan_discovery::init());
     }
     tauri_builder
         .plugin(tauri_plugin_dialog::init())
