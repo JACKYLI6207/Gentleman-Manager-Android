@@ -37,9 +37,65 @@ export function saveRemotePcFavorites(favorites: RemotePcFavorite[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites))
 }
 
-export function isRemotePcFavorite(host: string, port: number, favorites: RemotePcFavorite[]): boolean {
+export function findRemotePcFavorite(
+  host: string,
+  port: number,
+  favorites?: RemotePcFavorite[],
+): RemotePcFavorite | undefined {
   const key = favoriteKey(host, port)
-  return favorites.some((f) => favoriteKey(f.host, f.port) === key)
+  return (favorites ?? loadRemotePcFavorites()).find((f) => favoriteKey(f.host, f.port) === key)
+}
+
+export function isRemotePcFavorite(host: string, port: number, favorites: RemotePcFavorite[]): boolean {
+  return findRemotePcFavorite(host, port, favorites) !== undefined
+}
+
+/** 若已收藏則回傳自訂名稱，否則 fallback（如掃描到的電腦名） */
+export function getRemotePcFavoriteDisplayName(
+  host: string,
+  port: number,
+  fallback: string,
+): string {
+  const fav = findRemotePcFavorite(host, port)
+  if (fav && fav.name.trim()) return fav.name.trim()
+  return fallback.trim() || `PC (${host})`
+}
+
+export function addRemotePcFavorite(name: string, host: string, port: number): RemotePcFavorite[] {
+  const favorites = loadRemotePcFavorites()
+  const key = favoriteKey(host, port)
+  const trimmedHost = host.trim()
+  const trimmedName = name.trim() || `PC (${trimmedHost})`
+  const index = favorites.findIndex((f) => favoriteKey(f.host, f.port) === key)
+  const entry: RemotePcFavorite = {
+    name: trimmedName,
+    host: trimmedHost,
+    port,
+    starredAt: Date.now(),
+  }
+  if (index >= 0) {
+    favorites[index] = { ...entry, starredAt: favorites[index].starredAt }
+  } else {
+    favorites.unshift(entry)
+  }
+  saveRemotePcFavorites(favorites)
+  return favorites
+}
+
+export function updateRemotePcFavoriteName(
+  host: string,
+  port: number,
+  name: string,
+): RemotePcFavorite[] {
+  const favorites = loadRemotePcFavorites()
+  const key = favoriteKey(host, port)
+  const index = favorites.findIndex((f) => favoriteKey(f.host, f.port) === key)
+  if (index < 0) return favorites
+  const trimmed = name.trim()
+  if (!trimmed) return favorites
+  favorites[index] = { ...favorites[index], name: trimmed }
+  saveRemotePcFavorites(favorites)
+  return favorites
 }
 
 export function toggleRemotePcFavorite(
@@ -52,16 +108,10 @@ export function toggleRemotePcFavorite(
   const index = favorites.findIndex((f) => favoriteKey(f.host, f.port) === key)
   if (index >= 0) {
     favorites.splice(index, 1)
-  } else {
-    favorites.unshift({
-      name: name.trim() || `PC (${host})`,
-      host: host.trim(),
-      port,
-      starredAt: Date.now(),
-    })
+    saveRemotePcFavorites(favorites)
+    return favorites
   }
-  saveRemotePcFavorites(favorites)
-  return favorites
+  return addRemotePcFavorite(name, host, port)
 }
 
 export function removeRemotePcFavorite(host: string, port: number): RemotePcFavorite[] {

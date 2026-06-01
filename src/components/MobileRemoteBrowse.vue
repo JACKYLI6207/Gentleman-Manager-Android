@@ -18,6 +18,7 @@ import {
 } from '../api'
 import { listen } from '@tauri-apps/api/event'
 import { formatInvokeError } from '../invokeError'
+import { getRemotePcFavoriteDisplayName } from '../remotePcFavoritesStorage'
 
 const props = defineProps<{
   pc: RemotePcListItem
@@ -150,6 +151,12 @@ async function copyTransferLog() {
 }
 
 const host = computed(() => props.pc.connectedHost ?? props.pc.hosts[0] ?? '')
+
+const displayPcName = computed(() =>
+  host.value
+    ? getRemotePcFavoriteDisplayName(host.value, props.pc.port, props.pc.name)
+    : props.pc.name,
+)
 
 const pathLabel = computed(() => {
   if (!browse.value?.path) {
@@ -497,7 +504,7 @@ watch(
         </div>
       </div>
       <div class="remote-browse-title">
-        <span class="remote-browse-pc">{{ pc.name }}</span>
+        <span class="remote-browse-pc">{{ displayPcName }}</span>
         <span class="remote-browse-path">{{ pathLabel }}</span>
         <span class="remote-browse-hint">勾選後「下載」至手機；「上傳」可送檔案/資料夾至目前 PC 目錄</span>
       </div>
@@ -549,31 +556,33 @@ watch(
       </ul>
     </div>
 
-    <div class="remote-browse-foot">
-      <div class="remote-browse-foot-slot remote-browse-foot-slot--left">
-        <button type="button" class="tool tool--ghost tool--foot" :disabled="remoteBusy" @click="emit('exit')">
-          退出
-        </button>
-        <button
-          type="button"
-          class="tool tool--ghost tool--foot"
-          :disabled="!currentPath || remoteBusy"
-          @click="goUp"
-        >
-          上一層
-        </button>
+    <Teleport to="#gm-remote-browse-foot-slot">
+      <div class="remote-browse-foot remote-browse-foot--dock">
+        <div class="remote-browse-foot-slot remote-browse-foot-slot--left">
+          <button type="button" class="tool tool--ghost tool--foot" :disabled="remoteBusy" @click="emit('exit')">
+            退出
+          </button>
+          <button
+            type="button"
+            class="tool tool--ghost tool--foot"
+            :disabled="!currentPath || remoteBusy"
+            @click="goUp"
+          >
+            上一層
+          </button>
+        </div>
+        <div class="remote-browse-foot-slot remote-browse-foot-slot--right">
+          <button
+            type="button"
+            class="tool tool--ghost tool--foot tool--sort"
+            :disabled="loading || sortedEntries.length === 0"
+            @click="toggleNameSort"
+          >
+            {{ sortToggleLabel }}
+          </button>
+        </div>
       </div>
-      <div class="remote-browse-foot-slot remote-browse-foot-slot--right">
-        <button
-          type="button"
-          class="tool tool--ghost tool--foot tool--sort"
-          :disabled="loading || sortedEntries.length === 0"
-          @click="toggleNameSort"
-        >
-          {{ sortToggleLabel }}
-        </button>
-      </div>
-    </div>
+    </Teleport>
 
     <div v-if="flashHint" class="remote-browse-flash-hint" role="status" aria-live="polite">
       {{ flashHint }}
@@ -668,7 +677,6 @@ watch(
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: 100%;
   padding: 12px 14px 0;
   box-sizing: border-box;
   position: relative;
@@ -690,8 +698,9 @@ watch(
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  /* 底欄（退出/排序）+ 主頁分頁列 */
-  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(
+    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px) + 8px
+  );
 }
 
 .remote-browse-actions {
@@ -758,7 +767,9 @@ watch(
 .remote-browse-flash-hint {
   position: fixed;
   left: 50%;
-  bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(
+    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px) + 12px
+  );
   z-index: 90;
   transform: translateX(-50%);
   max-width: min(92vw, 320px);
@@ -835,37 +846,38 @@ watch(
   gap: 8px;
 }
 
-.remote-browse-foot {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: calc(36px + env(safe-area-inset-bottom, 0px));
-  z-index: 28;
+/* 掛在 App bottom-dock 內，緊貼主頁／下載／設定（零空隙） */
+.remote-browse-foot--dock {
+  flex-shrink: 0;
+  width: 100%;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 6px 4px;
-  pointer-events: none;
+  padding: 8px 14px 6px;
+  margin: 0;
+  border-top: 1px solid var(--gm-border, rgba(255, 255, 255, 0.12));
+  border-bottom: 1px solid var(--gm-border, rgba(255, 255, 255, 0.12));
+  background: var(--gm-page-bg, #1a1a1a);
   box-sizing: border-box;
 }
 
 .remote-browse-foot-slot {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   align-items: center;
-  pointer-events: auto;
-  max-width: 42%;
+  min-width: 0;
 }
 
 .remote-browse-foot-slot--left {
+  flex: 1;
   justify-content: flex-start;
 }
 
 .remote-browse-foot-slot--right {
+  flex-shrink: 0;
   justify-content: flex-end;
-  margin-left: auto;
 }
 
 .tool--foot {

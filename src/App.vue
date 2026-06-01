@@ -3506,6 +3506,7 @@ onUnmounted(() => {
             </div>
           </div>
         </footer>
+        <div id="gm-remote-browse-foot-slot" class="gm-remote-browse-foot-slot" />
         <nav class="bottom-tabs">
           <button type="button" :class="{ on: activeTab === 'home' }" @click="activeTab = 'home'">主頁</button>
           <button type="button" :class="{ on: activeTab === 'download' }" @click="activeTab = 'download'">下載</button>
@@ -3658,6 +3659,10 @@ onUnmounted(() => {
 
 <style scoped>
 .app {
+  /* 主頁底部分頁列高度（與 read-panel 留白一致） */
+  --gm-bottom-tabs-h: 34px;
+  /* 遠端管理：退出／上一層／升序 列（Teleport 進 bottom-dock） */
+  --gm-remote-foot-h: 44px;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -3798,7 +3803,13 @@ onUnmounted(() => {
   overflow: visible;
 }
 
-.remote-manage-scroll {
+.remote-manage-scroll:not(.remote-manage-scroll--browse) {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px));
+}
+
+.remote-manage-scroll.remote-manage-scroll--browse {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4481,6 +4492,15 @@ onUnmounted(() => {
   padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px));
 }
 
+/* 遠端管理列表預設勿用 108px；browse 模式由 JS class + 元件 fixed 底欄處理 */
+.comic-scroll.remote-manage-scroll {
+  padding-bottom: calc(var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px));
+}
+
+.comic-scroll.remote-manage-scroll.remote-manage-scroll--browse {
+  padding-bottom: 0;
+}
+
 .snapshot-list-scroll {
   padding: 8px 10px calc(108px + env(safe-area-inset-bottom, 0px));
 }
@@ -4697,6 +4717,10 @@ onUnmounted(() => {
   padding: 16px;
 }
 
+.gm-remote-browse-foot-slot:empty {
+  display: none;
+}
+
 .bottom-dock {
   position: fixed;
   left: 0;
@@ -4707,6 +4731,10 @@ onUnmounted(() => {
   flex-direction: column;
   background: #1a1a1a;
   padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.bottom-dock:has(.remote-browse-foot--dock) .bottom-tabs {
+  border-top: none;
 }
 
 .home-pager {

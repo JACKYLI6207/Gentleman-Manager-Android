@@ -920,8 +920,28 @@ fn format_wifi_probe_error(probe: &crate::lan_discovery::WifiProbeResult) -> Str
         "no_wifi" => {
             format!("未找到 Wi‑Fi Network（{detail}）。跨網請用 Tailscale IP（100.x.x.x）或先連 Wi‑Fi")
         }
+        "bind_failed" => format!(
+            "Wi‑Fi 綁定失敗（{detail}）。已改走一般連線（常見於同時開啟 Tailscale VPN）"
+        ),
         "http_error" => format!("HTTP 錯誤（{detail}）"),
         _ => format!("不能連線（{kind}：{detail}）"),
+    }
+}
+
+/// Wi‑Fi 強制綁定不可用時，改走系統預設路由（與手動輸入 IP 相同）。
+fn wifi_probe_should_fallback(probe: &crate::lan_discovery::WifiProbeResult) -> bool {
+    if probe.ok {
+        return false;
+    }
+    match probe.error_kind.as_deref() {
+        Some("no_wifi") | Some("bind_failed") => true,
+        Some("other") => {
+            let detail = probe.error.as_deref().unwrap_or("");
+            detail.contains("EPERM")
+                || detail.contains("Binding socket to network")
+                || detail.contains("bindProcessToNetwork")
+        }
+        _ => false,
     }
 }
 
@@ -988,8 +1008,8 @@ pub async fn test_remote_pc_connection<R: tauri::Runtime>(
                                 };
                             }
                             last_msg = format_wifi_probe_error(&probe);
-                            // 無 Wi‑Fi（如純 4G + Tailscale）時改走系統預設路由
-                            if probe.error_kind.as_deref() != Some("no_wifi") {
+                            // Wi‑Fi 綁定不可用（無 Wi‑Fi / Tailscale 佔用 VPN / EPERM）→ 改走一般 HTTP
+                            if !wifi_probe_should_fallback(&probe) {
                                 continue;
                             }
                         }

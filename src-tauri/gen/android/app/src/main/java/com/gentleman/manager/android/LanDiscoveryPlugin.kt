@@ -107,6 +107,19 @@ class LanDiscoveryPlugin(private val activity: Activity) : Plugin(activity) {
             result.put("errorKind", "no_route")
             result.put("error", e.message ?: "NoRouteToHost")
             return result
+        } catch (e: java.net.SocketException) {
+            val msg = e.message ?: ""
+            result.put("ok", false)
+            result.put(
+                "errorKind",
+                if (msg.contains("EPERM") || msg.contains("Binding socket to network")) {
+                    "bind_failed"
+                } else {
+                    "other"
+                },
+            )
+            result.put("error", e.javaClass.simpleName + ": " + msg)
+            return result
         } catch (e: Exception) {
             result.put("ok", false)
             result.put("errorKind", "other")

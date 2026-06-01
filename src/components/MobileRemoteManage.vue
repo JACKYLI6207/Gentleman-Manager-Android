@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   enterRemoteWifiMode,
   leaveRemoteWifiMode,
@@ -8,9 +8,12 @@ import {
   type RemotePcListItem,
 } from '../api'
 import {
+  addRemotePcFavorite,
+  getRemotePcFavoriteDisplayName,
   isRemotePcFavorite,
   loadRemotePcFavorites,
   toggleRemotePcFavorite,
+  updateRemotePcFavoriteName,
   type RemotePcFavorite,
 } from '../remotePcFavoritesStorage'
 import MobileRemoteBrowse from './MobileRemoteBrowse.vue'
@@ -19,8 +22,17 @@ const scanning = ref(false)
 const status = ref('')
 const pcs = ref<RemotePcListItem[]>([])
 const browsePc = ref<RemotePcListItem | null>(null)
+const rootRef = ref<HTMLElement | null>(null)
+
+function syncBrowseScrollClass() {
+  const scroll = rootRef.value?.closest('.remote-manage-scroll')
+  scroll?.classList.toggle('remote-manage-scroll--browse', !!browsePc.value)
+}
+
+watch(browsePc, syncBrowseScrollClass)
 const scanLog = ref('')
-const showScanLog = ref(true)
+/** 預設收合 LOG，避免佔滿畫面造成底部空白感 */
+const showScanLog = ref(false)
 const copyLogHint = ref('')
 const scanLogRef = ref<HTMLTextAreaElement | null>(null)
 const manualIp = ref('')
@@ -44,10 +56,44 @@ function reloadFavorites() {
   favorites.value = loadRemotePcFavorites()
 }
 
+function displayNameForPc(pc: RemotePcListItem) {
+  const host = pc.connectedHost ?? pc.hosts[0] ?? ''
+  if (!host) return pc.name
+  return getRemotePcFavoriteDisplayName(host, pc.port, pc.name)
+}
+
+function applyFavoriteNameToPcList(host: string, port: number, name: string) {
+  const display = name.trim()
+  if (!display) return
+  pcs.value = pcs.value.map((pc) => {
+    const h = pc.connectedHost ?? pc.hosts[0] ?? ''
+    if (pc.port === port && h === host) {
+      return { ...pc, name: display }
+    }
+    return pc
+  })
+}
+
+function saveFavoriteName(fav: RemotePcFavorite, rawName: string) {
+  const trimmed = rawName.trim()
+  if (!trimmed || trimmed === fav.name) return
+  favorites.value = updateRemotePcFavoriteName(fav.host, fav.port, trimmed)
+  applyFavoriteNameToPcList(fav.host, fav.port, trimmed)
+}
+
 function toggleFavorite(pc: { name: string; hosts: string[]; port: number; connectedHost?: string | null }) {
   const host = pc.connectedHost ?? pc.hosts[0] ?? ''
   if (!host) return
-  favorites.value = toggleRemotePcFavorite(pc.name, host, pc.port)
+  if (isFavoritePc(host, pc.port)) {
+    favorites.value = toggleRemotePcFavorite(pc.name, host, pc.port)
+    return
+  }
+  const suggested = displayNameForPc({ ...pc, connectedHost: host, connected: true })
+  const input = window.prompt('請為此 PC 取名（方便辨認）', suggested)
+  if (input === null) return
+  const customName = input.trim() || suggested
+  favorites.value = addRemotePcFavorite(customName, host, pc.port)
+  applyFavoriteNameToPcList(host, pc.port, customName)
 }
 
 async function connectToHost(
@@ -65,7 +111,11 @@ async function connectToHost(
     return { ok: false as const, message: result.message }
   }
   const item: RemotePcListItem = {
-    name: displayName?.trim() || `PC (${ip})`,
+    name: getRemotePcFavoriteDisplayName(
+      result.connectedHost ?? ip,
+      port,
+      displayName?.trim() || `PC (${ip})`,
+    ),
     hosts: [ip],
     port,
     connected: true,
@@ -155,11 +205,16 @@ async function refreshList() {
       pcs.value.map(async (pc, index) => {
         const result = await testRemotePcConnection(pc.hosts, pc.port)
         if (gen !== scanGeneration) return
+        const connectedHost = result.connectedHost
         pcs.value[index] = {
           ...pc,
           connected: result.connected,
           message: result.message,
-          connectedHost: result.connectedHost,
+          connectedHost,
+          name:
+            result.connected && connectedHost
+              ? getRemotePcFavoriteDisplayName(connectedHost, pc.port, pc.name)
+              : pc.name,
         }
         testLines.push(
           `${pc.name} (${pc.hosts.join(' / ')}:${pc.port}) → ${
@@ -172,6 +227,7 @@ async function refreshList() {
     appendLog('連線測試', testLines)
     const okCount = pcs.value.filter((p) => p.connected === true).length
     status.value = `掃描完成：${okCount} / ${pcs.value.length} 台能連線`
+    showScanLog.value = okCount === 0
   } catch (e) {
     if (gen !== scanGeneration) return
     status.value = String(e)
@@ -184,7 +240,7 @@ async function refreshList() {
 
 function openManage(pc: RemotePcListItem) {
   if (pc.connected !== true) return
-  browsePc.value = pc
+  browsePc.value = { ...pc, name: displayNameForPc(pc) }
 }
 
 async function connectManualIp() {
@@ -229,6 +285,7 @@ async function connectFavorite(fav: RemotePcFavorite) {
 
 onBeforeUnmount(() => {
   scanGeneration++
+  rootRef.value?.closest('.remote-manage-scroll')?.classList.remove('remote-manage-scroll--browse')
   void leaveRemoteWifiMode()
 })
 
@@ -242,11 +299,12 @@ onMounted(async () => {
     // ignore
   }
   void refreshList()
+  syncBrowseScrollClass()
 })
 </script>
 
 <template>
-  <div class="remote-manage-root">
+  <div ref="rootRef" class="remote-manage-root" :class="{ 'remote-manage-root--browse': !!browsePc }">
   <div v-if="browsePc" class="remote-browse-shell">
     <MobileRemoteBrowse :pc="browsePc" @exit="browsePc = null" />
   </div>
@@ -256,13 +314,13 @@ onMounted(async () => {
         <strong>同一 Wi‑Fi</strong>：按「重新掃描」或手動輸入區網 IP（192.168.x.x）。
         <strong>4G／跨網（Tailscale）</strong>：手機與 PC 皆開 Tailscale，手動輸入 PC 的
         <code>100.x.x.x</code> 後按「連線」（不必關 4G）。
-        可將已連線的 PC 按 ★ 收藏，下次一鍵連線。
+        可將已連線的 PC 按 ★ 收藏並<strong>自訂名稱</strong>；下方列表與管理頁會顯示該名稱。
       </p>
       <button type="button" class="tool tool--primary" :disabled="scanning" @click="refreshList">
         {{ scanning ? '掃描中…' : '重新掃描' }}
       </button>
       <div v-if="favorites.length > 0" class="remote-favorites">
-        <p class="remote-favorites-label">★ 已收藏 PC</p>
+        <p class="remote-favorites-label">★ 已收藏 PC（可編輯名稱）</p>
         <ul class="remote-favorites-list">
           <li
             v-for="fav in favorites"
@@ -270,7 +328,16 @@ onMounted(async () => {
             class="remote-favorite-item"
           >
             <div class="remote-favorite-main">
-              <span class="remote-favorite-name">{{ fav.name }}</span>
+              <input
+                class="remote-favorite-name-input"
+                type="text"
+                :value="fav.name"
+                maxlength="64"
+                placeholder="自訂名稱"
+                :disabled="favoriteConnectingKey !== '' || manualTesting || scanning"
+                @change="saveFavoriteName(fav, ($event.target as HTMLInputElement).value)"
+                @blur="saveFavoriteName(fav, ($event.target as HTMLInputElement).value)"
+              />
               <span class="remote-favorite-addr">{{ fav.host }}:{{ fav.port }}</span>
             </div>
             <div class="remote-favorite-actions">
@@ -333,7 +400,7 @@ onMounted(async () => {
     <ul v-if="pcs.length > 0" class="remote-pc-list">
       <li v-for="(pc, i) in pcs" :key="`${pc.hosts.join(',')}:${pc.port}:${i}`" class="remote-pc-item">
         <div class="remote-pc-main">
-          <span class="remote-pc-name">{{ pc.name }}</span>
+          <span class="remote-pc-name">{{ displayNameForPc(pc) }}</span>
           <span class="remote-pc-addr">{{ pc.hosts.join(' / ') }}:{{ pc.port }}</span>
         </div>
         <div class="remote-pc-footer">
@@ -394,7 +461,7 @@ onMounted(async () => {
         class="remote-scan-log"
         readonly
         :value="scanLog"
-        rows="14"
+        rows="8"
       />
     </div>
   </div>
@@ -403,6 +470,10 @@ onMounted(async () => {
 
 <style scoped>
 .remote-manage-root {
+  display: block;
+}
+
+.remote-manage-root--browse {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -416,14 +487,12 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 100%;
+  width: 100%;
 }
 
 .remote-manage {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 12px 14px 24px;
+  padding: 12px 14px 16px;
 }
 
 .remote-manage-toolbar {
@@ -487,7 +556,14 @@ onMounted(async () => {
   min-width: 0;
 }
 
-.remote-favorite-name {
+.remote-favorite-name-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 215, 0, 0.35);
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
   font-weight: 600;
   font-size: 14px;
 }
@@ -716,8 +792,8 @@ onMounted(async () => {
   font-size: 11px;
   line-height: 1.45;
   resize: vertical;
-  min-height: 180px;
-  max-height: 50vh;
+  min-height: 100px;
+  max-height: 32vh;
   user-select: text;
   -webkit-user-select: text;
 }
