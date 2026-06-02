@@ -148,6 +148,28 @@ pub async fn ensure_pc_remote_api_v3(host: &str, port: u16) -> anyhow::Result<()
     Ok(())
 }
 
+/// 確認 PC 支援遠端檔案操作（remote_api >= 4）。
+pub async fn ensure_pc_remote_api_v4(host: &str, port: u16) -> anyhow::Result<()> {
+    ensure_pc_remote_api_v2(host, port).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .build()
+        .context("建立 HTTP 用戶端失敗")?;
+    let resp = client
+        .get(format!("http://{host}:{port}/api/v1/health"))
+        .send()
+        .await
+        .context("無法連線 PC health")?;
+    let body: HealthResponse = resp.json().await.context("解析 PC health 失敗")?;
+    if body.remote_api < 4 {
+        anyhow::bail!(
+            "PC 遠端服務不支援檔案操作（remote_api={}）。請更新 PC 版 EXE 並重新啟動遠端管理",
+            body.remote_api
+        );
+    }
+    Ok(())
+}
+
 pub async fn check_remote_upload_conflicts(
     host: &str,
     port: u16,

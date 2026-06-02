@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   cancelRemotePcTransfer,
   listRemotePcDirectory,
@@ -7,8 +7,10 @@ import {
   pickRemoteUploadFile,
   pickRemoteUploadFolder,
   planRemotePcUpload,
+  remotePcFileOp,
   transferRemotePcFiles,
   uploadRemotePcFiles,
+  type RemotePcFileOpAction,
   type RemotePcBrowseResult,
   type RemotePcDirEntry,
   type RemotePcListItem,
@@ -38,6 +40,12 @@ const error = ref('')
 const selectedItems = ref<Map<string, string>>(new Map())
 const remoteBusy = ref(false)
 const uploadMenuOpen = ref(false)
+const opMenuOpen = ref(false)
+const renameDialogOpen = ref(false)
+const renameDialogInput = ref('')
+const renameDialogPath = ref('')
+const renameDialogIsDir = ref(false)
+const renameInputRef = ref<HTMLInputElement | null>(null)
 const uploadConflictOpen = ref(false)
 const uploadConflictList = ref<string[]>([])
 let pendingUploadConflictResolve: ((policy: RemoteUploadConflictPolicy | null) => void) | null =
@@ -216,6 +224,39 @@ function parentPath(path: string): string {
   return path.slice(0, idx)
 }
 
+function baseName(path: string): string {
+  const norm = path.replace(/\\/g, '/')
+  const idx = norm.lastIndexOf('/')
+  return idx >= 0 ? norm.slice(idx + 1) : norm
+}
+
+/** 原檔名副檔名（含 `.`）；資料夾或無副檔名則回傳空字串 */
+function fileExtension(name: string): string {
+  const idx = name.lastIndexOf('.')
+  if (idx <= 0) return ''
+  const ext = name.slice(idx)
+  return ext.length >= 2 ? ext : ''
+}
+
+/** 使用者輸入是否含明確副檔名（如 `123.rar`） */
+function userHasExplicitExtension(input: string): boolean {
+  const idx = input.lastIndexOf('.')
+  if (idx <= 0) return false
+  return input.slice(idx + 1).trim().length > 0
+}
+
+/** 未指定副檔名時保留原名副檔名 */
+function resolveRenameFinalName(originalName: string, userInput: string, isDir: boolean): string {
+  const trimmed = userInput.trim()
+  if (!trimmed) return ''
+  if (isDir) return trimmed
+  const origExt = fileExtension(originalName)
+  if (!origExt) return trimmed
+  if (userHasExplicitExtension(trimmed)) return trimmed
+  const base = trimmed.replace(/\.+$/, '')
+  return `${base}${origExt}`
+}
+
 function entryPath(entry: RemotePcDirEntry): string {
   return joinPath(currentPath.value, entry.name)
 }
@@ -255,6 +296,11 @@ async function loadDirectory(path: string) {
   if (!host.value) {
     error.value = '缺少 PC 連線位址'
     return
+  }
+  const normPath = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const pathChanging = normPath(path) !== normPath(currentPath.value)
+  if (pathChanging) {
+    selectedItems.value = new Map()
   }
   loading.value = true
   error.value = ''
@@ -302,6 +348,7 @@ function cancelUploadConflict() {
 
 async function startUpload(kind: 'file' | 'folder') {
   uploadMenuOpen.value = false
+  opMenuOpen.value = false
   if (!host.value || remoteBusy.value) return
   try {
     const sourceUri =
@@ -361,6 +408,8 @@ async function startUpload(kind: 'file' | 'folder') {
 }
 
 async function startDownload() {
+  uploadMenuOpen.value = false
+  opMenuOpen.value = false
   if (!host.value || remoteBusy.value) return
   if (selectedCount.value === 0) {
     showFlashHint('請先勾選要下載的檔案或資料夾')
@@ -431,6 +480,110 @@ async function cancelActiveTransfer() {
   }
 }
 
+async function runFileOp(action: RemotePcFileOpAction) {
+  opMenuOpen.value = false
+  uploadMenuOpen.value = false
+  if (!host.value || remoteBusy.value) return
+  const paths = Array.from(selectedItems.value.keys())
+
+  if (action === 'rename') {
+    if (paths.length !== 1) {
+      showFlashHint('重新命名請只選一項')
+      return
+    }
+    openRenameDialog(paths[0]!)
+    return
+  }
+
+  remoteBusy.value = true
+  try {
+    if (action === 'delete') {
+      if (paths.length === 0) {
+        showFlashHint('請先勾選要刪除的項目')
+        return
+      }
+      if (!window.confirm(`確定刪除 PC 上 ${paths.length} 項？此操作無法復原。`)) return
+    } else if (action === 'paste') {
+      // 貼上至目前 PC 目錄
+    } else if (paths.length === 0) {
+      showFlashHint('請先勾選項目')
+      return
+    }
+
+    const result = await remotePcFileOp(
+      host.value,
+      props.pc.port,
+      action,
+      paths,
+      currentPath.value,
+      '',
+    )
+    if (action === 'cut' || action === 'delete') {
+      selectedItems.value = new Map()
+    }
+    await loadDirectory(currentPath.value)
+    showFlashHint(result.message)
+  } catch (e) {
+    showFlashHint(formatInvokeError(e), 2800)
+  } finally {
+    remoteBusy.value = false
+  }
+}
+
+function openRenameDialog(relPath: string) {
+  const oldName = baseName(relPath)
+  const entry = sortedEntries.value.find((e) => entryPath(e) === relPath)
+  renameDialogPath.value = relPath
+  renameDialogIsDir.value = entry?.isDir ?? false
+  renameDialogInput.value = oldName
+  renameDialogOpen.value = true
+  void nextTick(() => {
+    const el = renameInputRef.value
+    if (!el) return
+    el.focus()
+    el.select()
+  })
+}
+
+function cancelRenameDialog() {
+  renameDialogOpen.value = false
+  renameDialogPath.value = ''
+}
+
+async function confirmRenameDialog() {
+  if (!host.value || remoteBusy.value || !renameDialogPath.value) return
+  const oldName = baseName(renameDialogPath.value)
+  const finalName = resolveRenameFinalName(
+    oldName,
+    renameDialogInput.value,
+    renameDialogIsDir.value,
+  )
+  if (!finalName) {
+    showFlashHint('名稱不可為空')
+    return
+  }
+  renameDialogOpen.value = false
+  remoteBusy.value = true
+  try {
+    const result = await remotePcFileOp(
+      host.value,
+      props.pc.port,
+      'rename',
+      [renameDialogPath.value],
+      currentPath.value,
+      finalName,
+    )
+    selectedItems.value = new Map()
+    await loadDirectory(currentPath.value)
+    showFlashHint(result.message)
+  } catch (e) {
+    showFlashHint(formatInvokeError(e), 2800)
+  } finally {
+    remoteBusy.value = false
+    renameDialogPath.value = ''
+  }
+}
+
 onMounted(async () => {
   void loadDirectory('')
   unlistenTransfer = await listen<RemoteTransferProgressEvent>(
@@ -472,21 +625,66 @@ watch(
   <div class="remote-browse">
     <div class="remote-browse-header">
       <div class="remote-browse-actions">
-        <button
-          type="button"
-          class="tool tool--ghost remote-browse-select-all"
-          :disabled="loading || sortedEntries.length === 0 || remoteBusy"
-          @click="toggleSelectAll"
-        >
-          {{ allCurrentSelected ? '取消全選' : '全選' }}
-        </button>
+        <div class="remote-browse-actions-left">
+          <button
+            type="button"
+            class="tool tool--ghost remote-browse-select-all"
+            :disabled="loading || sortedEntries.length === 0 || remoteBusy"
+            @click="toggleSelectAll"
+          >
+            {{ allCurrentSelected ? '取消全選' : '全選' }}
+          </button>
+          <div class="remote-upload-menu-wrap">
+            <button
+              type="button"
+              class="tool tool--ghost remote-browse-op"
+              :disabled="remoteBusy"
+              @click.stop="opMenuOpen = !opMenuOpen; uploadMenuOpen = false"
+            >
+              操作 ▾
+            </button>
+            <div v-if="opMenuOpen" class="remote-upload-menu remote-op-menu" @click.stop>
+              <button
+                type="button"
+                :disabled="remoteBusy || selectedCount === 0"
+                @click="runFileOp('cut')"
+              >
+                剪下
+              </button>
+              <button
+                type="button"
+                :disabled="remoteBusy || selectedCount === 0"
+                @click="runFileOp('copy')"
+              >
+                複製
+              </button>
+              <button type="button" :disabled="remoteBusy" @click="runFileOp('paste')">
+                貼上
+              </button>
+              <button
+                type="button"
+                :disabled="remoteBusy || selectedCount === 0"
+                @click="runFileOp('delete')"
+              >
+                刪除
+              </button>
+              <button
+                type="button"
+                :disabled="remoteBusy || selectedCount !== 1"
+                @click="runFileOp('rename')"
+              >
+                重新命名
+              </button>
+            </div>
+          </div>
+        </div>
         <div class="remote-browse-actions-right">
           <div class="remote-upload-menu-wrap">
             <button
               type="button"
               class="tool tool--ghost remote-browse-upload"
               :disabled="remoteBusy"
-              @click.stop="uploadMenuOpen = !uploadMenuOpen"
+              @click.stop="uploadMenuOpen = !uploadMenuOpen; opMenuOpen = false"
             >
               上傳 ▾
             </button>
@@ -508,7 +706,7 @@ watch(
       <div class="remote-browse-title">
         <span class="remote-browse-pc">{{ displayPcName }}</span>
         <span class="remote-browse-path">{{ pathLabel }}</span>
-        <span class="remote-browse-hint">勾選後「下載」至手機；「上傳」可送檔案/資料夾至目前 PC 目錄</span>
+        <span class="remote-browse-hint">勾選後可「操作」剪下/複製/貼上/刪除/重新命名（於 PC 執行）；「下載」至手機；「上傳」送檔案至 PC</span>
       </div>
     </div>
 
@@ -605,6 +803,26 @@ watch(
             都保留
           </button>
           <button type="button" class="tool tool--ghost" @click="cancelUploadConflict">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="renameDialogOpen" class="remote-upload-conflict-overlay" @click.self="cancelRenameDialog">
+      <div class="remote-upload-conflict-panel remote-rename-panel" @click.stop>
+        <p class="remote-upload-conflict-title">重新命名</p>
+        <p class="remote-upload-conflict-hint">未輸入副檔名時將保留原名副檔名（例：`12345.zip` → `123` 會變成 `123.zip`）</p>
+        <input
+          ref="renameInputRef"
+          v-model="renameDialogInput"
+          class="remote-rename-input"
+          type="text"
+          maxlength="255"
+          autocomplete="off"
+          @keydown.enter.prevent="confirmRenameDialog"
+        />
+        <div class="remote-upload-conflict-actions">
+          <button type="button" class="tool tool--primary" @click="confirmRenameDialog">確認</button>
+          <button type="button" class="tool tool--ghost" @click="cancelRenameDialog">取消</button>
         </div>
       </div>
     </div>
@@ -712,9 +930,27 @@ watch(
   justify-content: space-between;
 }
 
-.remote-browse-select-all {
+.remote-browse-actions-left {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
   flex-shrink: 0;
-  margin-right: auto;
+}
+
+.remote-browse-select-all,
+.remote-browse-op {
+  flex-shrink: 0;
+}
+
+.remote-op-menu {
+  left: 0;
+  right: auto;
+  min-width: 120px;
+}
+
+.remote-browse-select-all {
+  margin-right: 0;
 }
 
 .remote-browse-actions-right {
@@ -845,6 +1081,22 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.remote-rename-panel {
+  width: min(100%, 340px);
+}
+
+.remote-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: #252525;
+  color: inherit;
+  font-size: 15px;
 }
 
 /* bottom-dock flex 內，緊貼 nav.bottom-tabs（零空隙） */

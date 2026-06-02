@@ -562,6 +562,32 @@ export function uploadRemotePcFiles(
   return invoke<null>('upload_remote_pc_files', { host, port, files, onConflict })
 }
 
+export type RemotePcFileOpAction = 'cut' | 'copy' | 'paste' | 'delete' | 'rename'
+
+export type RemotePcFileOpResult = {
+  ok: boolean
+  message: string
+  clipboardCount?: number | null
+}
+
+export function remotePcFileOp(
+  host: string,
+  port: number,
+  action: RemotePcFileOpAction,
+  paths: string[],
+  destPath: string,
+  newName: string,
+) {
+  return invoke<RemotePcFileOpResult>('remote_pc_file_op', {
+    host,
+    port,
+    action,
+    paths,
+    destPath,
+    newName,
+  })
+}
+
 export async function listenRemoteTransferProgress(
   handler: (payload: RemoteTransferProgressEvent) => void,
 ): Promise<import('@tauri-apps/api/event').UnlistenFn> {

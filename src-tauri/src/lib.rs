@@ -16,6 +16,7 @@ mod local_reader;
 mod logger;
 mod mobile_settings;
 mod pc_remote_discovery;
+mod remote_pc_file_op;
 mod remote_pc_transfer;
 mod remote_pc_upload;
 mod snapshot_catalog;
@@ -116,6 +117,7 @@ pub fn run() {
             pick_remote_upload_folder,
             plan_remote_pc_upload,
             upload_remote_pc_files,
+            remote_pc_file_op,
         ])
         .events(tauri_specta::collect_events![
             LogEvent,

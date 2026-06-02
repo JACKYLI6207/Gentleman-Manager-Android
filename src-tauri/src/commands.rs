@@ -1170,3 +1170,25 @@ pub async fn upload_remote_pc_files(
         .await
         .map_err(|err| CommandError::from("遠端上傳失敗", err))
 }
+
+#[tauri::command(async)]
+#[specta::specta]
+pub async fn remote_pc_file_op(
+    host: String,
+    port: u16,
+    action: String,
+    paths: Vec<String>,
+    dest_path: String,
+    new_name: String,
+) -> CommandResult<crate::remote_pc_file_op::RemotePcFileOpResult> {
+    crate::remote_pc_file_op::remote_pc_file_op(
+        &host,
+        port,
+        &action,
+        &paths,
+        &dest_path,
+        &new_name,
+    )
+    .await
+    .map_err(|err| CommandError::from("PC 檔案操作失敗", err))
+}
