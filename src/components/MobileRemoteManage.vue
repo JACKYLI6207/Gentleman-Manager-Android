@@ -18,6 +18,11 @@ import {
 } from '../remotePcFavoritesStorage'
 import MobileRemoteBrowse from './MobileRemoteBrowse.vue'
 
+const props = defineProps<{
+  /** 主頁且 subNav=remote 時才 Teleport 底欄至 bottom-dock */
+  homeDockActive: boolean
+}>()
+
 const scanning = ref(false)
 const status = ref('')
 const pcs = ref<RemotePcListItem[]>([])
@@ -306,7 +311,11 @@ onMounted(async () => {
 <template>
   <div ref="rootRef" class="remote-manage-root" :class="{ 'remote-manage-root--browse': !!browsePc }">
   <div v-if="browsePc" class="remote-browse-shell">
-    <MobileRemoteBrowse :pc="browsePc" @exit="browsePc = null" />
+    <MobileRemoteBrowse
+      :pc="browsePc"
+      :dock-foot-enabled="homeDockActive"
+      @exit="browsePc = null"
+    />
   </div>
   <div v-else class="remote-manage">
     <div class="remote-manage-toolbar">

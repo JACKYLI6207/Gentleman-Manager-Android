@@ -22,6 +22,8 @@ import { getRemotePcFavoriteDisplayName } from '../remotePcFavoritesStorage'
 
 const props = defineProps<{
   pc: RemotePcListItem
+  /** true 才 Teleport 底欄至 bottom-dock（主頁＋遠端管理）；否則不渲染 */
+  dockFootEnabled: boolean
 }>()
 
 const emit = defineEmits<{
@@ -556,8 +558,8 @@ watch(
       </ul>
     </div>
 
-    <Teleport to="#gm-remote-browse-foot-slot">
-      <div class="remote-browse-foot remote-browse-foot--dock">
+    <Teleport to="#gm-remote-browse-foot-slot" :disabled="!dockFootEnabled">
+      <div v-if="dockFootEnabled" class="remote-browse-foot remote-browse-foot--dock">
         <div class="remote-browse-foot-slot remote-browse-foot-slot--left">
           <button type="button" class="tool tool--ghost tool--foot" :disabled="remoteBusy" @click="emit('exit')">
             退出
@@ -677,6 +679,7 @@ watch(
   min-height: 0;
   display: flex;
   flex-direction: column;
+  height: 100%;
   padding: 12px 14px 0;
   box-sizing: border-box;
   position: relative;
@@ -698,9 +701,7 @@ watch(
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: calc(
-    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px) + 8px
-  );
+  padding-bottom: 8px;
 }
 
 .remote-browse-actions {
@@ -768,7 +769,7 @@ watch(
   position: fixed;
   left: 50%;
   bottom: calc(
-    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px) + 12px
+    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px) + 10px
   );
   z-index: 90;
   transform: translateX(-50%);
@@ -846,7 +847,7 @@ watch(
   gap: 8px;
 }
 
-/* 掛在 App bottom-dock 內，緊貼主頁／下載／設定（零空隙） */
+/* bottom-dock flex 內，緊貼 nav.bottom-tabs（零空隙） */
 .remote-browse-foot--dock {
   flex-shrink: 0;
   width: 100%;
@@ -857,7 +858,6 @@ watch(
   padding: 8px 14px 6px;
   margin: 0;
   border-top: 1px solid var(--gm-border, rgba(255, 255, 255, 0.12));
-  border-bottom: 1px solid var(--gm-border, rgba(255, 255, 255, 0.12));
   background: var(--gm-page-bg, #1a1a1a);
   box-sizing: border-box;
 }

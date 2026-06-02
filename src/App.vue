@@ -130,6 +130,10 @@ type BrowseKind = 'home' | 'albums' | 'category' | 'ranking' | 'keyword' | 'snap
 
 const activeTab = ref<TabId>('home')
 const subNav = ref<SubNav>('search')
+/** 遠端 browse 底欄 Teleport：僅主頁 + 遠端管理分頁 + 已進入 browse */
+const remoteBrowseDockFoot = computed(
+  () => activeTab.value === 'home' && subNav.value === 'remote',
+)
 const activeTopCategory = ref<string>('')
 const expandedNavParent = ref<string | null>(null)
 const categoryBrowseCateId = ref<number | null>(null)
@@ -3123,7 +3127,7 @@ onUnmounted(() => {
       />
 
       <div v-show="subNav === 'remote'" class="comic-scroll remote-manage-scroll">
-        <MobileRemoteManage />
+        <MobileRemoteManage :home-dock-active="remoteBrowseDockFoot" />
       </div>
 
       <div v-show="subNav === 'snapshots'" class="comic-scroll snapshot-list-scroll">
@@ -3207,8 +3211,11 @@ onUnmounted(() => {
           @stop="stopOnlineReading"
         />
       </div>
+    </div>
 
-      <div v-if="activeTab === 'home' && !readerFullscreenActive" class="bottom-dock" @click.stop>
+    <!-- 底欄常駐於 app 層（勿放 v-show 的 .home 內）：Teleport 目標不銷毀 + flex 緊貼分頁列 -->
+    <div v-show="!readerFullscreenActive" class="bottom-dock" @click.stop>
+      <div v-show="activeTab === 'home'" class="bottom-dock-home">
         <span ref="pagerMeasureRef" class="pt-num pt-num--measure" aria-hidden="true">0</span>
         <div v-if="showSearchPager" class="list-toolbar" @click.stop>
           <div class="list-toolbar-left">
@@ -3506,13 +3513,13 @@ onUnmounted(() => {
             </div>
           </div>
         </footer>
-        <div id="gm-remote-browse-foot-slot" class="gm-remote-browse-foot-slot" />
-        <nav class="bottom-tabs">
-          <button type="button" :class="{ on: activeTab === 'home' }" @click="activeTab = 'home'">主頁</button>
-          <button type="button" :class="{ on: activeTab === 'download' }" @click="activeTab = 'download'">下載</button>
-          <button type="button" :class="{ on: activeTab === 'settings' }" @click="activeTab = 'settings'">設定</button>
-        </nav>
       </div>
+      <div id="gm-remote-browse-foot-slot" class="gm-remote-browse-foot-slot" />
+      <nav class="bottom-tabs">
+        <button type="button" :class="{ on: activeTab === 'home' }" @click="activeTab = 'home'">主頁</button>
+        <button type="button" :class="{ on: activeTab === 'download' }" @click="activeTab = 'download'">下載</button>
+        <button type="button" :class="{ on: activeTab === 'settings' }" @click="activeTab = 'settings'">設定</button>
+      </nav>
     </div>
 
     <section v-show="activeTab === 'download'" class="tab-panel tab-panel--fill">
@@ -3528,12 +3535,6 @@ onUnmounted(() => {
         @pick-category="onPickCategoryDir"
       />
     </section>
-
-    <nav v-if="activeTab !== 'home'" class="bottom-tabs bottom-tabs--solo">
-      <button type="button" :class="{ on: activeTab === 'home' }" @click="activeTab = 'home'">主頁</button>
-      <button type="button" :class="{ on: activeTab === 'download' }" @click="activeTab = 'download'">下載</button>
-      <button type="button" :class="{ on: activeTab === 'settings' }" @click="activeTab = 'settings'">設定</button>
-    </nav>
 
     <MobileKoreanDownloadDialog
       :showing="koreanModeDialogOpen"
@@ -3659,9 +3660,8 @@ onUnmounted(() => {
 
 <style scoped>
 .app {
-  /* 主頁底部分頁列高度（與 read-panel 留白一致） */
+  /* 主頁底部分頁列高度（browse 外層留白） */
   --gm-bottom-tabs-h: 34px;
-  /* 遠端管理：退出／上一層／升序 列（Teleport 進 bottom-dock） */
   --gm-remote-foot-h: 44px;
   display: flex;
   flex-direction: column;
@@ -3814,6 +3814,9 @@ onUnmounted(() => {
   flex-direction: column;
   overflow: hidden;
   padding-bottom: 0;
+  margin-bottom: calc(
+    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px)
+  );
 }
 
 .sub-nav {
@@ -4497,8 +4500,12 @@ onUnmounted(() => {
   padding-bottom: calc(var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px));
 }
 
+/* browse 底欄 Teleport 至 bottom-dock：外層 margin = 底欄 + 分頁列 */
 .comic-scroll.remote-manage-scroll.remote-manage-scroll--browse {
   padding-bottom: 0;
+  margin-bottom: calc(
+    var(--gm-remote-foot-h, 44px) + var(--gm-bottom-tabs-h, 34px) + env(safe-area-inset-bottom, 0px)
+  );
 }
 
 .snapshot-list-scroll {
@@ -4735,6 +4742,10 @@ onUnmounted(() => {
 
 .bottom-dock:has(.remote-browse-foot--dock) .bottom-tabs {
   border-top: none;
+}
+
+.bottom-dock-home {
+  display: contents;
 }
 
 .home-pager {
